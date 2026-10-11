@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router";
+import jsQR from "jsqr";
+import QRCode from "qrcode";
 import ModalDialog from "./components/ModalDialog";
 import { useConfirm } from "./components/ConfirmDialog";
 import { deleteRoom, fetchAccessRecords, fetchAdminBusinesses, fetchAdminRecords, fetchDoorSimulator, fetchMyAccessHistory,
@@ -12,8 +14,7 @@ const DEVICE_STATUS = { not_configured: "Hardware not configured", online: "Onli
 const ADMIN_SOURCES = { rooms: "rooms", grants: "room-access-grants", changes: "room-permission-changes", history: "room-access-history" };
 const EMPLOYER_SOURCES = { rooms: "rooms", grants: "grants", changes: "permission-changes", history: "history" };
 const emptyRoom = { name: "", building: "", floor: "", door_identifier: "" };
-// Matches CODE_DIGITS in the backend's door simulator.
-const CODE_DIGITS = 4;
+const QR_PREFIX = "employee-door";
 
 const dateTime = (value) => value ? new Date(value).toLocaleString() : "Not recorded";
 const floorName = (floor) => /^\d+$/.test(floor) ? `Floor ${floor}` : floor;
@@ -48,6 +49,83 @@ function DoorIcon() {
     <path d="M6 21V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v17M4 21h16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
     <circle cx="14.6" cy="12.4" r="1.1" fill="currentColor" />
   </svg>;
+}
+
+function LiveQrScanner({ roomId, onScan, onClose }) {
+  const videoRef = useRef(null);
+  const onScanRef = useRef(onScan);
+  const [cameraError, setCameraError] = useState("");
+
+  useEffect(() => { onScanRef.current = onScan; }, [onScan]);
+
+  useEffect(() => {
+    let stopped = false;
+    let stream;
+    let animationFrame;
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+
+    async function startCamera() {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error("Live camera scanning requires a secure HTTPS connection.");
+        }
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } }, audio: false,
+        });
+        if (stopped) { stream.getTracks().forEach((track) => track.stop()); return; }
+        const video = videoRef.current;
+        video.srcObject = stream;
+        await video.play();
+
+        const scanFrame = () => {
+          if (stopped) return;
+          if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const image = context.getImageData(0, 0, canvas.width, canvas.height);
+            const result = jsQR(image.data, image.width, image.height, { inversionAttempts: "dontInvert" });
+            if (result) {
+              const [prefix, scannedRoom, proof] = result.data.split(":");
+              if (prefix === QR_PREFIX && Number(scannedRoom) === roomId && proof) {
+                stopped = true;
+                stream.getTracks().forEach((track) => track.stop());
+                onScanRef.current(proof);
+                return;
+              }
+            }
+          }
+          animationFrame = window.requestAnimationFrame(scanFrame);
+        };
+        animationFrame = window.requestAnimationFrame(scanFrame);
+      } catch (err) {
+        if (!stopped) setCameraError(err.name === "NotAllowedError"
+          ? "Camera access was blocked. Allow camera permission and try again."
+          : err.message || "The camera could not be started.");
+      }
+    }
+
+    startCamera();
+    return () => {
+      stopped = true;
+      window.cancelAnimationFrame(animationFrame);
+      stream?.getTracks().forEach((track) => track.stop());
+    };
+  }, [roomId]);
+
+  return <div className="door-qr-scanner" role="dialog" aria-modal="true" aria-label="Scan door QR code">
+    <div className="door-qr-scanner-card">
+      <strong>Scan the door QR code</strong>
+      <p>Point the rear camera at the changing QR code. The door unlocks automatically when it is recognized.</p>
+      <div className="door-qr-camera">
+        <video ref={videoRef} muted playsInline aria-label="Live rear camera" />
+        <span aria-hidden="true" />
+      </div>
+      {cameraError && <p className="message error" role="alert">{cameraError}</p>}
+      <button type="button" className="button button-outline" onClick={onClose}>Cancel</button>
+    </div>
+  </div>;
 }
 
 function Heading({ title, description, action }) {
@@ -189,7 +267,7 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
-  const [doorCode, setDoorCode] = useState("");
+  const [scanningRoom, setScanningRoom] = useState(null);
   const [confirm, confirmation] = useConfirm();
   const employer = role === "employer";
   const admin = role === "admin";
@@ -210,18 +288,17 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
   }, {}));
   const selected = rooms.rows.find((room) => room.id === selectedId) || null;
 
-  async function unlock(room) {
+  async function unlock(room, proximityProof = "") {
     setBusy(true);
     setError("");
     setNotice("");
     try {
       // On real doors the proof comes from the door's own NFC tag or Bluetooth beacon once readers are installed.
-      // A simulated door shows a code on its screen instead, which the employee reads off it and types in.
+      // A simulated door supplies its short-lived proof only through the QR code scanned at the door.
       const result = await unlockRoom(token, room.id, room.device_status === "simulator"
-        ? { access_method: "door_code", proximity_proof: doorCode }
+        ? { access_method: "door_code", proximity_proof: proximityProof }
         : { access_method: "NDEFReader" in window ? "nfc" : "bluetooth", proximity_proof: "" });
       setNotice(result.detail);
-      setDoorCode("");
     } catch (err) {
       setError(err.message);
       if (err.status === 401) onAuthError?.(err);
@@ -250,12 +327,13 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
       <div><dt>Door hardware</dt><dd>{DEVICE_STATUS[selected.device_status] || selected.device_status}</dd></div>
     </dl>
     <div className="room-detail-actions">
-      {(employer || selected.can_unlock) && selected.device_status === "simulator" && <input className="door-code-input"
-        aria-label="Door code" inputMode="numeric" autoComplete="off" maxLength={CODE_DIGITS} placeholder="Door code"
-        value={doorCode} onChange={(event) => setDoorCode(event.target.value.replace(/\D/g, ""))} />}
-      {(employer || selected.can_unlock) && <button type="button" className="button button-coral"
-        disabled={busy || (selected.device_status === "simulator" && doorCode.length !== CODE_DIGITS)}
-        onClick={() => unlock(selected)}>{busy ? "Checking…" : "Unlock door"}</button>}
+      {(employer || selected.can_unlock) && selected.device_status === "simulator" && <>
+        <button type="button" className="button button-coral" disabled={busy} onClick={() => setScanningRoom(selected)}>
+          {busy ? "Checking…" : "Scan QR to unlock"}
+        </button>
+      </>}
+      {(employer || selected.can_unlock) && selected.device_status !== "simulator" && <button type="button" className="button button-coral"
+        disabled={busy} onClick={() => unlock(selected)}>{busy ? "Checking…" : "Unlock door"}</button>}
       {employer && <>
         <button type="button" className="button button-outline" onClick={() => setManaging(selected)}>Manage permissions</button>
         <button type="button" className="button button-outline" onClick={() => setEditing(selected)}>Edit</button>
@@ -300,6 +378,11 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
     }} />}
     {managing && <PermissionsDialog token={token} room={managing} employees={employees} onClose={() => setManaging(null)} onChanged={rooms.reload} />}
     {confirmation}
+    {scanningRoom && <LiveQrScanner roomId={scanningRoom.id} onClose={() => setScanningRoom(null)} onScan={async (proof) => {
+      const room = scanningRoom;
+      setScanningRoom(null);
+      await unlock(room, proof);
+    }} />}
   </>;
 }
 
@@ -491,7 +574,9 @@ function SimulatorPage({ token, onAuthError }) {
   const [roomId, setRoomId] = useState("");
   const [running, setRunning] = useState(null);
   const [door, setDoor] = useState(null);
+  const [qrImage, setQrImage] = useState("");
   const [error, setError] = useState("");
+  const qrPayload = door ? `${QR_PREFIX}:${door.room}:${door.door_code}` : "";
 
   // The page is the door: it keeps checking in while open and switches the simulator off when left.
   useEffect(() => {
@@ -512,6 +597,15 @@ function SimulatorPage({ token, onAuthError }) {
     };
   }, [token, running, onAuthError]);
 
+  useEffect(() => {
+    if (!qrPayload) return undefined;
+    let cancelled = false;
+    QRCode.toDataURL(qrPayload, { width: 260, margin: 2, errorCorrectionLevel: "M" })
+      .then((url) => { if (!cancelled) setQrImage(url); })
+      .catch(() => { if (!cancelled) setError("The door QR code could not be created."); });
+    return () => { cancelled = true; };
+  }, [qrPayload]);
+
   async function start() {
     setError("");
     try {
@@ -522,7 +616,7 @@ function SimulatorPage({ token, onAuthError }) {
   }
 
   return <>
-    <Heading title="Door Simulator" description="Use this screen as a room's door for testing. Employees with access unlock it by typing the door code shown here into their phone, and it locks again after 5 seconds." />
+    <Heading title="Door Simulator" description="Use this screen as a room's door for testing. Employees with access scan the changing QR code while at the door, and it locks again after 5 seconds." />
     <Messages error={error || rooms.error} />
     {!door ? <section className="panel records-panel">
       <div className="door-sim-start">
@@ -540,9 +634,9 @@ function SimulatorPage({ token, onAuthError }) {
         <strong className="door-sim-state">{door.locked ? "Locked" : "Unlocked"}</strong>
         <p className="door-sim-note">{door.locked ? "Waiting for an authorized employee." : `Locks again in ${Math.ceil(door.relocks_in)} s`}</p>
         <div className="door-sim-code">
-          <small>Door code</small>
-          <strong>{door.door_code}</strong>
-          <small>Changes in {door.code_changes_in} s</small>
+          <small>Scan to unlock</small>
+          {qrImage && <img src={qrImage} alt={`Changing QR code for ${door.room_name}`} />}
+          <small>New QR code in {door.code_changes_in} s</small>
         </div>
         <button type="button" className="button button-outline" onClick={() => { setRunning(null); setDoor(null); }}>Stop simulator</button>
       </section>

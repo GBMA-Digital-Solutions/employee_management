@@ -518,7 +518,13 @@ body:has(.form-modal[open]) { overflow: hidden; }
 .access-pick .muted { margin: 4px 0; }
 @media (max-width: 700px) { .access-pick-columns { grid-template-columns: 1fr; } }
 .status-simulator { background: #dce9f7; color: #2b5079; }
-.door-code-input { width: 130px; min-height: 43px; letter-spacing: .3em; text-align: center; }
+.door-qr-scanner { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 18px; background: #241818cc; }
+.door-qr-scanner-card { display: grid; justify-items: center; gap: 12px; width: min(480px, 100%); padding: 22px; border-radius: 14px; background: var(--cream); text-align: center; box-shadow: 0 24px 70px #0006; }
+.door-qr-scanner-card > strong { color: var(--burgundy); font-size: 21px; }
+.door-qr-scanner-card > p { margin: 0; color: #67655e; line-height: 1.5; }
+.door-qr-camera { position: relative; width: min(400px, 82vw); aspect-ratio: 1; overflow: hidden; border-radius: 12px; background: #181818; }
+.door-qr-camera video { width: 100%; height: 100%; object-fit: cover; }
+.door-qr-camera span { position: absolute; inset: 14%; border: 3px solid #fff; border-radius: 12px; box-shadow: 0 0 0 999px #0004; }
 .door-sim-start { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 8px; }
 .door-sim-start select { width: auto; min-width: 260px; }
 .door-sim { display: grid; justify-items: center; gap: 10px; margin-bottom: 20px; padding: 32px 24px; text-align: center; transition: background .3s ease; }
@@ -534,7 +540,7 @@ body:has(.form-modal[open]) { overflow: hidden; }
 .door-sim-unlocked .door-sim-state { color: #2f7d45; }
 .door-sim-code { display: grid; justify-items: center; gap: 2px; margin: 8px 0 6px; padding: 12px 26px; border: 1px dashed #d8d8cb; border-radius: 12px; background: #fff; }
 .door-sim-code small { color: var(--olive); font-size: 12px; font-weight: 700; }
-.door-sim-code strong { color: var(--burgundy); font-size: 44px; letter-spacing: .18em; font-variant-numeric: tabular-nums; }
+.door-sim-code img { display: block; width: min(260px, 68vw); height: auto; border-radius: 6px; }
 .door-sim-heading { margin: 0 0 14px; color: var(--burgundy); font-size: 17px; }
 .status-granted { background: #d8edda; color: #245b32; }
 .status-denied, .status-revoked { background: #ffe2da; color: #8b2e21; }
