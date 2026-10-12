@@ -380,10 +380,10 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
         <h3>{title}</h3>
         <p className="muted">{list.length} {list.length === 1 ? "room" : "rooms"}</p>
         <div className="room-grid">{list.map((room) => <button key={room.id} type="button" aria-pressed={room.id === selectedId}
-          className={`room-tile${room.id === selectedId ? " selected" : ""}${role === "employee" && !room.can_unlock ? " locked" : ""}`}
+          className={`room-tile${room.id === selectedId ? " selected" : ""}${room.is_check_in_door ? " check-in" : ""}${role === "employee" && !room.can_unlock ? " locked" : ""}`}
           onClick={() => { setSelectedId(room.id === selectedId ? null : room.id); setError(""); setNotice(""); }}>
           <DoorIcon />
-          <span>{room.name}{room.is_check_in_door && <small>Check-in door</small>}{role === "employee" && <small>{room.can_unlock ? "Access granted" : "No access"}</small>}</span>
+          <span>{room.name}{room.is_check_in_door && <small className="check-in-label">Check-in door</small>}{role === "employee" && <small>{room.can_unlock ? "Access granted" : "No access"}</small>}</span>
         </button>)}</div>
         {selected && list.includes(selected) && detail}
       </section>)}
@@ -641,7 +641,7 @@ function SimulatorPage({ token, onAuthError }) {
       <div className="door-sim-start">
         <select aria-label="Room" value={roomId} onChange={(event) => setRoomId(event.target.value)}>
           <option value="">Select a room</option>
-          {rooms.rows.map((room) => <option key={room.id} value={room.id}>{room.name} · {room.building}, {floorName(room.floor)}</option>)}
+          {rooms.rows.map((room) => <option key={room.id} value={room.id}>{room.is_check_in_door ? "CHECK-IN DOOR: " : ""}{room.name} · {room.building}, {floorName(room.floor)}</option>)}
         </select>
         <button type="button" className="button button-coral" disabled={!roomId} onClick={start}>Start door</button>
       </div>
@@ -649,6 +649,7 @@ function SimulatorPage({ token, onAuthError }) {
     </section> : <>
       <section className={`panel door-sim ${door.locked ? "door-sim-locked" : "door-sim-unlocked"}`} aria-live="polite">
         <p className="door-sim-room">{door.room_name} · {door.building}, {floorName(door.floor)}</p>
+        {door.is_check_in_door && <span className="check-in-door-badge">Check-in door</span>}
         <div className="door-sim-visual"><DoorIcon /></div>
         <strong className="door-sim-state">{door.locked ? "Locked" : "Unlocked"}</strong>
         <p className="door-sim-note">{door.locked ? "Waiting for an authorized employee." : `Locks again in ${Math.ceil(door.relocks_in)} s`}</p>

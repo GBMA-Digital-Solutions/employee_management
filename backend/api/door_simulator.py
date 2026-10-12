@@ -79,6 +79,7 @@ def state(door):
     seconds = time.time()
     return {
         "room": room.pk, "room_name": room.name, "building": room.building, "floor": room.floor,
+        "is_check_in_door": room.is_check_in_door,
         "locked": open_for <= 0, "relocks_in": max(0, round(open_for, 1)),
         "door_code": door_code(door.secret, int(seconds // CODE_PERIOD)),
         "code_changes_in": round(CODE_PERIOD - seconds % CODE_PERIOD),
@@ -89,7 +90,8 @@ def state(door):
 
 SimulatorStateSerializer = inline_serializer(name="DoorSimulatorState", fields={
     "room": serializers.IntegerField(), "room_name": serializers.CharField(), "building": serializers.CharField(),
-    "floor": serializers.CharField(), "locked": serializers.BooleanField(),
+    "floor": serializers.CharField(), "is_check_in_door": serializers.BooleanField(),
+    "locked": serializers.BooleanField(),
     "relocks_in": serializers.FloatField(help_text="Seconds until the door locks again; 0 when locked."),
     "door_code": serializers.CharField(help_text="Show this on the door screen only; it is what an employee "
                                                  "standing at the door reads and types in."),
