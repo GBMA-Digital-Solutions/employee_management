@@ -139,11 +139,15 @@ const rosterStates = [["present", "Present"], ["remote", "Remote"], ["absent", "
 function AttendanceRoster({ date, setDate, rows, holiday, token }) {
   const latest = today();
   const [now, setNow] = useState(0);
+  const [viewing, setViewing] = useState(null);
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
-  return <section className="panel roster-panel" aria-label="Daily attendance roster">
+  const detailVisits = viewing ? viewing.records.flatMap((record) => (record.visits || []).map((visit) => ({
+    ...visit, shift: record.shift,
+  }))).sort((a, b) => new Date(a.check_in_at) - new Date(b.check_in_at)) : [];
+  return <><section className="panel roster-panel" aria-label="Daily attendance roster">
     <div className="roster-heading">
       <div><h3>Daily roster</h3><p className="muted">{longDate(date)}{holiday ? ` · Holiday: ${holiday.name}` : isWeekend(date) ? " · Weekend" : ""}</p></div>
       <div className="roster-day">
@@ -161,22 +165,38 @@ function AttendanceRoster({ date, setDate, rows, holiday, token }) {
       columns={[
         { title: "Employee", value: (row) => `${row.first_name} ${row.last_name}`, secondary: (row) => row.department, avatar: true },
         { title: "Status", value: (row) => row.state === "unrecorded" ? "Unrecorded" : row.state === "leave" ? "Leave" : label(row.state), badge: true },
-        { title: "First check-in", value: (row) => clockTime(row.record?.check_in_at) },
-        { title: "Latest check-out", value: (row) => clockTime(row.record?.check_out_at) },
-        { title: "Current visit", value: (row) => {
+        { title: "Current state", value: (row) => {
           const visit = row.activeRecord?.visits?.find((item) => !item.check_out_at);
-          return visit ? runningTime(visit.check_in_at, now) : "Not in office";
+          return visit ? `In office for ${runningTime(visit.check_in_at, now)}` : "Outside office";
         } },
-        { title: "Office visits", value: (row) => row.record?.visits?.length || 0 },
-        { title: "Time outside", value: (row) => `${row.record?.time_out_hours || "0.00"} hours` },
-        { title: "Shifts", value: (row) => row.records?.map((record) => label(record.shift)).join(", ") },
-        { title: "Total hours", value: (row) => row.totalHours },
+        { title: "Completed office time", value: (row) => `${row.totalHours} hours` },
       ]}
       rows={rows.filter((row) => row.records.some((record) => record.check_in_at))}
       token={token}
+      onRowClick={setViewing}
+      actions={(row) => <button type="button" onClick={() => setViewing(row)}>View details</button>}
       empty={date === latest ? "Nobody has checked in today yet." : `Nobody checked in on ${longDate(date)}.`}
     />
-  </section>;
+  </section>
+  {viewing && <ModalDialog title={`${viewing.first_name} ${viewing.last_name} attendance`} wide onClose={() => setViewing(null)}>
+    <section className="attendance-detail-dialog">
+      <div className="attendance-detail-summary">
+        <div><span>Status</span><strong>{viewing.activeRecord ? "In office" : "Outside office"}</strong></div>
+        <div><span>Office visits</span><strong>{detailVisits.length}</strong></div>
+        <div><span>Completed office time</span><strong>{viewing.totalHours} hours</strong></div>
+        <div><span>Recorded time outside</span><strong>{viewing.records.reduce((sum, record) => sum + Number(record.time_out_hours || 0), 0).toFixed(2)} hours</strong></div>
+      </div>
+      <h3>Check-in and check-out history</h3>
+      <DataTable columns={[
+        { title: "Visit", value: (visit) => `Visit ${detailVisits.indexOf(visit) + 1}` },
+        { title: "Shift", value: (visit) => label(visit.shift) },
+        { title: "Check-in", value: (visit) => clockTime(visit.check_in_at) },
+        { title: "Check-out", value: (visit) => visit.check_out_at ? clockTime(visit.check_out_at) : "Currently inside" },
+        { title: "Time in office", value: (visit) => runningTime(visit.check_in_at, visit.check_out_at ? new Date(visit.check_out_at).getTime() : now) },
+      ]} rows={detailVisits} empty="No QR attendance visits recorded." />
+    </section>
+  </ModalDialog>}
+  </>;
 }
 
 function ManagerCalendarPage({ token, events, onChange, onAuthError }) {

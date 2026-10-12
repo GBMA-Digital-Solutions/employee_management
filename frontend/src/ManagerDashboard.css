@@ -97,6 +97,13 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .records-filters input { max-width: 250px; }
 .records-filters select { width: auto; }
 .record-count { color: var(--olive); font-weight: 700; }
+.attendance-detail-dialog h3 { margin: 24px 0 12px; color: var(--burgundy); }
+.attendance-detail-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.attendance-detail-summary > div { padding: 15px; border: 1px solid #e1d8c9; border-radius: 10px; background: #fff; }
+.attendance-detail-summary span, .attendance-detail-summary strong { display: block; }
+.attendance-detail-summary span { margin-bottom: 5px; color: var(--olive); font-size: 12px; font-weight: 700; }
+.attendance-detail-summary strong { color: var(--burgundy); font-size: 18px; }
+@media (max-width: 700px) { .attendance-detail-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 .visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
