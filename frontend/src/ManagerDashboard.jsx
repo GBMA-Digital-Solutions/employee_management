@@ -301,7 +301,16 @@ function ResourcePage({ resource, data, token, account, onChange, onAuthError })
   const roster = resource !== "attendance" ? [] : employees
     .filter((person) => person.is_active && person.date_joined <= rosterDate)
     .map((person) => {
-      const records = (data.attendance || []).filter((row) => row.employee === person.id && row.date === rosterDate);
+      const attendance = data.attendance || [];
+      const datedRecords = attendance.filter((row) => row.employee === person.id && row.date === rosterDate);
+      // An open shift from yesterday is still active today (most commonly a
+      // night shift). Show it on today's live roster just as the employee
+      // workspace does, instead of incorrectly saying nobody is checked in.
+      const carriedActive = rosterDate === today() ? attendance.find((row) =>
+        row.employee === person.id && row.date === shiftDate(rosterDate, -1)
+        && row.check_in_at && !row.check_out_at) : null;
+      const records = carriedActive && !datedRecords.some((row) => row.id === carriedActive.id)
+        ? [carriedActive, ...datedRecords] : datedRecords;
       const activeRecord = records.find((row) => row.check_in_at && !row.check_out_at) || null;
       const record = activeRecord || records.find((row) => row.shift === "day") || records[0] || null;
       const totalHours = records.reduce((sum, row) => sum + Number(row.hours_worked || 0), 0).toFixed(2);
