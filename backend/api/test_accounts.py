@@ -1,6 +1,6 @@
 import base64
 import re
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 from hashlib import sha256
 from io import BytesIO
@@ -696,6 +696,34 @@ class EmployeeOnboardingTests(APITestCase):
         self.assertEqual(checked_out.status_code, 200, checked_out.data)
         self.assertEqual(checked_out.data["attendance"]["hours_worked"], "4.00")
         self.assertEqual(checked_out.data["date"], timezone.localdate(start))
+
+    def test_qr_day_shift_can_check_out_the_following_day(self):
+        self.hire()
+        employee = Employee.objects.get(email="aline@example.com")
+        self.signed_contract(employee)
+        self.client.force_authenticate(employee.account.user)
+        start_date = timezone.localdate()
+        start = timezone.make_aware(
+            datetime.combine(start_date, time(23, 0)), timezone.get_current_timezone(),
+        )
+        finish = start + timedelta(hours=11)
+        Attendance.objects.create(
+            employee=employee,
+            date=start_date,
+            shift="day",
+            status="present",
+            check_in_at=start,
+        )
+
+        with patch("api.accounts.timezone.now", return_value=finish):
+            checked_out = self.client.post(
+                "/api/me/attendance/", {"action": "check_out", "shift": "day", "time": "10:00"}, format="json",
+            )
+
+        self.assertEqual(checked_out.status_code, 200, checked_out.data)
+        self.assertEqual(checked_out.data["attendance"]["hours_worked"], "11.00")
+        record = Attendance.objects.get(employee=employee)
+        self.assertEqual(timezone.localdate(record.check_out_at), timezone.localdate(finish))
 
     def test_account_identifies_signed_in_person_and_role(self):
         account = self.client.get("/api/account/")

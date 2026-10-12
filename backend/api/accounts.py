@@ -945,11 +945,11 @@ class MyAttendanceView(APIView):
             raise serializers.ValidationError("You are recorded as being on approved leave today.")
         with transaction.atomic():
             attendance = Attendance.objects.select_for_update().filter(employee=employee, date=date, shift=shift).first()
-            if action == "check_out" and attendance is None and shift == "night":
+            if action == "check_out" and attendance is None:
                 attendance = Attendance.objects.select_for_update().filter(
                     employee=employee,
                     date=date - timedelta(days=1),
-                    shift="night",
+                    shift=shift,
                     check_in_at__isnull=False,
                     check_out_at__isnull=True,
                 ).first()
@@ -979,8 +979,9 @@ class MyAttendanceView(APIView):
                     raise serializers.ValidationError(f"Check in to the {shift} shift before checking out.")
                 if attendance.check_out_at:
                     raise serializers.ValidationError(f"You have already checked out of the {shift} shift.")
-                recorded_at = timezone.make_aware(datetime.combine(attendance.date, selected_time), timezone.get_current_timezone())
-                if shift == "night" and recorded_at <= attendance.check_in_at:
+                checkout_date = date if attendance.date < date else attendance.date
+                recorded_at = timezone.make_aware(datetime.combine(checkout_date, selected_time), timezone.get_current_timezone())
+                if shift == "night" and attendance.date == date and recorded_at <= attendance.check_in_at:
                     recorded_at += timedelta(days=1)
                 if recorded_at <= attendance.check_in_at:
                     raise serializers.ValidationError("Check-out time must be later than check-in time.")
