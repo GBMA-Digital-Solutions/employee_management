@@ -547,7 +547,7 @@ class ContractViewSet(ManagerViewSet):
     ),
 )
 class AttendanceViewSet(ManagerViewSet):
-    queryset = Attendance.objects.select_related("employee").order_by("-date", "-id")
+    queryset = Attendance.objects.select_related("employee").prefetch_related("visits").order_by("-date", "-id")
     serializer_class = AttendanceSerializer
 
 

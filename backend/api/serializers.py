@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from . import contract_pay, leave_management, onboarding
 from .contract_content import sanitize_contract_html
-from .models import (Employee, Contract, ContractTerminationRequest, Attendance,
+from .models import (Employee, Contract, ContractTerminationRequest, Attendance, AttendanceVisit,
                      LeaveBalance, LeaveRequest, Holiday, Announcement,
                      CalendarEvent, Salary, Payroll)
 from .permissions import business_id_for
@@ -272,6 +272,18 @@ class ContractSerializer(ManagerRecordSerializer):
 
 
 class AttendanceSerializer(ManagerRecordSerializer):
+    visits = serializers.SerializerMethodField()
+    time_out_hours = serializers.SerializerMethodField()
+
+    def get_visits(self, obj):
+        return [{"id": visit.id, "check_in_at": visit.check_in_at, "check_out_at": visit.check_out_at}
+                for visit in obj.visits.all()]
+
+    def get_time_out_hours(self, obj):
+        visits = list(obj.visits.all())
+        seconds = sum(max(0, (later.check_in_at - earlier.check_out_at).total_seconds())
+                      for earlier, later in zip(visits, visits[1:]) if earlier.check_out_at)
+        return f"{seconds / 3600:.2f}"
     def validate(self, attrs):
         if self.instance and "shift" in attrs and attrs["shift"] != self.instance.shift:
             raise serializers.ValidationError({"shift": "A recorded shift cannot be changed."})

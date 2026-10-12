@@ -1,5 +1,3 @@
-import { locationText } from "./geolocation";
-
 function isoDate(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
@@ -70,7 +68,7 @@ export const modules = {
     title: "Attendance", singular: "attendance record", description: "Record daily attendance and actual hours worked, including remote work.",
     defaults: () => ({ employee: "", date: today(), shift: "day", status: "present", hours_worked: "8.00", notes: "" }),
     fields: [employee, field("date", "Work date", "date"), field("shift", "Shift", "select", { options: choices("day", "night") }), field("status", "Status", "select", { options: choices("present", "remote", "absent") }), { ...amount("hours_worked", "Hours worked"), max: 24 }, notes],
-    columns: [personColumn, { title: "Date", value: (row) => row.date }, { title: "Shift", value: (row) => label(row.shift) }, statusColumn, { title: "Hours", value: (row) => row.hours_worked }, { title: "Location", value: (row) => [["In", locationText(row, "check_in")], ["Out", locationText(row, "check_out")]].filter(([, text]) => text).map(([when, text]) => `${when}: ${text}`).join(" · ") || "Not verified" }, { title: "Notes", value: (row) => row.notes }],
+    columns: [personColumn, { title: "Date", value: (row) => row.date }, { title: "Shift", value: (row) => label(row.shift) }, statusColumn, { title: "Time in office", value: (row) => `${row.hours_worked} hours` }, { title: "Time outside", value: (row) => `${row.time_out_hours || "0.00"} hours` }, { title: "Visits", value: (row) => row.visits?.length || 0 }, { title: "Notes", value: (row) => row.notes }],
   },
   leave: {
     title: "Leave", singular: "leave request", description: "Review employee leave requests, approve or reject them, and manage yearly balances.",

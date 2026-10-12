@@ -504,6 +504,8 @@ body:has(.form-modal[open]) { overflow: hidden; }
 .room-detail-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-left: auto; }
 .room-detail-actions .muted { margin: 0; max-width: 260px; }
 .room-detail-actions .danger-link { padding: 6px; border: 0; background: transparent; color: #a53d31; font-weight: 700; }
+.attendance-scan-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px; border: 1px solid #e2c27d; border-radius: 9px; background: #fff8e7; }
+.attendance-scan-actions strong { width: 100%; color: #5b3a00; font-size: 12px; }
 .access-grant-form { margin-bottom: 18px; }
 .access-grant-form fieldset { margin: 0; padding: 0; border: 0; }
 .access-grant-row { display: flex; gap: 10px; }

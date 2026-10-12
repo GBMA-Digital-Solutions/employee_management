@@ -304,7 +304,7 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
   }, {}));
   const selected = rooms.rows.find((room) => room.id === selectedId) || null;
 
-  async function unlock(room, proximityProof = "") {
+  async function unlock(room, proximityProof = "", attendanceAction = "") {
     setBusy(true);
     setError("");
     setNotice("");
@@ -312,7 +312,7 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
       // On real doors the proof comes from the door's own NFC tag or Bluetooth beacon once readers are installed.
       // A simulated door supplies its short-lived proof only through the QR code scanned at the door.
       const result = await unlockRoom(token, room.id, room.device_status === "simulator"
-        ? { access_method: "door_code", proximity_proof: proximityProof }
+        ? { access_method: "door_code", proximity_proof: proximityProof, ...(attendanceAction ? { attendance_action: attendanceAction } : {}) }
         : { access_method: "NDEFReader" in window ? "nfc" : "bluetooth", proximity_proof: "" });
       setNotice(result.detail);
     } catch (err) {
@@ -344,11 +344,17 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
       <div><dt>Door hardware</dt><dd>{DEVICE_STATUS[selected.device_status] || selected.device_status}</dd></div>
     </dl>
     <div className="room-detail-actions">
-      {(employer || selected.can_unlock) && selected.device_status === "simulator" && <>
-        <button type="button" className="button button-coral" disabled={busy} onClick={() => setScanningRoom(selected)}>
-          {busy ? "Checking…" : "Scan QR to unlock"}
-        </button>
-      </>}
+      {selected.can_unlock && selected.device_status === "simulator" && selected.is_check_in_door && <div className="attendance-scan-actions">
+        <strong>Choose before scanning</strong>
+        <button type="button" className="button button-coral" disabled={busy}
+          onClick={() => setScanningRoom({ room: selected, action: "check_in" })}>Check in and unlock</button>
+        <button type="button" className="button button-outline" disabled={busy}
+          onClick={() => setScanningRoom({ room: selected, action: "check_out" })}>Check out and unlock</button>
+      </div>}
+      {(employer || selected.can_unlock) && selected.device_status === "simulator" && !(selected.can_unlock && selected.is_check_in_door) && <button
+        type="button" className="button button-coral" disabled={busy} onClick={() => setScanningRoom({ room: selected, action: "" })}>
+        {busy ? "Checking…" : "Scan QR to unlock"}
+      </button>}
       {(employer || selected.can_unlock) && selected.device_status !== "simulator" && <button type="button" className="button button-coral"
         disabled={busy} onClick={() => unlock(selected)}>{busy ? "Checking…" : "Unlock door"}</button>}
       {employer && <>
@@ -397,10 +403,10 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
     }} />}
     {managing && <PermissionsDialog token={token} room={managing} employees={employees} onClose={() => setManaging(null)} onChanged={rooms.reload} />}
     {confirmation}
-    {scanningRoom && <LiveQrScanner roomId={scanningRoom.id} onClose={() => setScanningRoom(null)} onScan={async (proof) => {
-      const room = scanningRoom;
+    {scanningRoom && <LiveQrScanner roomId={scanningRoom.room.id} onClose={() => setScanningRoom(null)} onScan={async (proof) => {
+      const { room, action } = scanningRoom;
       setScanningRoom(null);
-      await unlock(room, proof);
+      await unlock(room, proof, action);
     }} />}
   </>;
 }

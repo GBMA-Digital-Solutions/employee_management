@@ -5,8 +5,6 @@ import CompanyCalendar from "./CompanyCalendar";
 import GoogleMeetPage from "./GoogleMeetPage";
 import ModalDialog from "./components/ModalDialog";
 import Payslip from "./components/Payslip";
-import LocationStatus from "./components/LocationStatus";
-import WorkplaceLocationCard, { WorkplaceLocationHint } from "./components/WorkplaceLocationCard";
 import { useConfirm } from "./components/ConfirmDialog";
 import { Link, Navigate, Route, Routes } from "react-router";
 import { approveContractWorker, calculatePayroll, decideContractTermination, deleteRecord, downloadContract, fetchCompanyThread, fetchEmailSettings, fetchEmployeePhoto, fetchRecords, fetchReports, fetchSalaryPaymentHistory, fetchSalaryPaymentPreview, initiateContractTermination, markCompanyThreadRead, markSalaryPaid, requestNewContractSignature, resendContractSignatureEmail, saveEmailSettings, saveRecord, sendCompanyMessage, sendContractForSignature } from "./api";
@@ -163,9 +161,14 @@ function AttendanceRoster({ date, setDate, rows, holiday, token }) {
       columns={[
         { title: "Employee", value: (row) => `${row.first_name} ${row.last_name}`, secondary: (row) => row.department, avatar: true },
         { title: "Status", value: (row) => row.state === "unrecorded" ? "Unrecorded" : row.state === "leave" ? "Leave" : label(row.state), badge: true },
-        { title: "Check-in", value: (row) => clockTime(row.record?.check_in_at), secondary: (row) => <LocationStatus record={row.record} prefix="check_in" /> },
-        { title: "Check-out", value: (row) => clockTime(row.record?.check_out_at), secondary: (row) => <LocationStatus record={row.record} prefix="check_out" /> },
-        { title: "Live time", value: (row) => row.activeRecord ? runningTime(row.activeRecord.check_in_at, now) : "Not recorded" },
+        { title: "First check-in", value: (row) => clockTime(row.record?.check_in_at) },
+        { title: "Latest check-out", value: (row) => clockTime(row.record?.check_out_at) },
+        { title: "Current visit", value: (row) => {
+          const visit = row.activeRecord?.visits?.find((item) => !item.check_out_at);
+          return visit ? runningTime(visit.check_in_at, now) : "Not in office";
+        } },
+        { title: "Office visits", value: (row) => row.record?.visits?.length || 0 },
+        { title: "Time outside", value: (row) => `${row.record?.time_out_hours || "0.00"} hours` },
         { title: "Shifts", value: (row) => row.records?.map((record) => label(record.shift)).join(", ") },
         { title: "Total hours", value: (row) => row.totalHours },
       ]}
@@ -706,7 +709,6 @@ function ResourcePage({ resource, data, token, account, onChange, onAuthError })
         : "Open a highlighted request to approve or reject it."}</p></span><span className="attention-open-label">Open</span></button>}
     {resource === "employees" && !account?.email_configured && <p className="message">Invitation emails are not being sent. <Link to="/dashboard/settings">Add a Gmail App Password in Settings</Link> so new hires receive their sign-in details.</p>}
     {config.fields.some((field) => field.type === "employee") && !employees.length && <p className="message"><Link to="/dashboard/employees">Add an employee</Link> to start recording {config.title.toLowerCase()}.</p>}
-    {resource === "attendance" && <WorkplaceLocationHint token={token} />}
     {resource === "attendance" && employees.length > 0 && <AttendanceRoster date={rosterDate} setDate={setRosterDate} rows={roster} holiday={holiday} token={token} />}
     {form && <ModalDialog title={`${editing ? "Edit" : "Add"} ${config.singular}`} wide={resource === "contracts" || config.fields.length > 6} onClose={() => { setForm(null); setEditing(null); }}><form className="record-form" ref={formRef} onSubmit={submit}>
       <h3>{editing ? "Edit" : "Add"} {config.singular}</h3>
@@ -956,7 +958,6 @@ function SettingsPage({ token, account, onAccountChange, onAuthError }) {
         </dl>
       </section>
       <PasswordCard token={token} forced={false} onChanged={passwordChanged} />
-      <WorkplaceLocationCard token={token} onAuthError={onAuthError} />
       <section className="panel record-form form-launch-card"><div><h3>Invitation email</h3><p className="muted">{configured ? `Emails are sent from ${form.email_host_user || "the platform email address"}.` : "Invitation email has not been configured."}</p></div>{canManage && <button className="button button-coral" type="button" onClick={() => { setError(""); setEditOpen(true); }}>{configured ? "Update email settings" : "Configure email"}</button>}</section>
     </div>
     {editOpen && <ModalDialog title="Invitation email settings" onClose={() => setEditOpen(false)}><form className="record-form" onSubmit={submit}>

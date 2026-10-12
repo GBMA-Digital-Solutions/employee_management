@@ -8,7 +8,7 @@ from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from .door_hardware import DoorGateway
-from .models import (AccountProfile, Attendance, Business, Contract, Employee, Room, RoomAccessAttempt, RoomAccessGrant,
+from .models import (AccountProfile, Attendance, AttendanceVisit, Business, Contract, Employee, Room, RoomAccessAttempt, RoomAccessGrant,
                      RoomPermissionChange, SimulatedDoor)
 from .onboarding import purge_employee
 from .platform import purge_business
@@ -65,9 +65,12 @@ class AccessControlTests(APITestCase):
     def as_user(self, user):
         self.client.force_authenticate(user)
 
-    def unlock(self, room, proof=""):
+    def unlock(self, room, proof="", attendance_action=None):
+        payload = {"access_method": "nfc", "proximity_proof": proof}
+        if attendance_action:
+            payload["attendance_action"] = attendance_action
         return self.client.post(f"/api/access-control/rooms/{room.pk}/unlock/",
-                                {"access_method": "nfc", "proximity_proof": proof}, format="json")
+                                payload, format="json")
 
     def grant(self, room, email):
         return self.client.post("/api/access-control/grants/", {"room": room.pk, "email": email}, format="json")
@@ -251,21 +254,27 @@ class AccessControlTests(APITestCase):
         ])
 
     @override_settings(DOOR_GATEWAY=FAKE_GATEWAY)
-    def test_check_in_door_unlock_records_attendance_once(self):
+    def test_check_in_door_requires_alternating_attendance_actions(self):
         self.room.is_check_in_door = True
         self.room.save(update_fields=["is_check_in_door"])
         RoomAccessGrant.objects.create(room=self.room, employee=self.aline)
         self.as_user(self.aline_user)
 
-        first = self.unlock(self.room, proof="tag-door-101")
+        missing = self.unlock(self.room, proof="tag-door-101")
+        self.assertEqual(missing.status_code, 400)
+        first = self.unlock(self.room, proof="tag-door-101", attendance_action="check_in")
         self.assertEqual((first.status_code, first.data["attendance"]), (200, "checked_in"))
         attendance = Attendance.objects.get(employee=self.aline, date=timezone.localdate(), shift="day")
         self.assertIsNotNone(attendance.check_in_at)
-        self.assertEqual(attendance.check_in_location_status, "inside")
 
-        second = self.unlock(self.room, proof="tag-door-101")
-        self.assertEqual(second.data["attendance"], "already_checked_in")
+        duplicate = self.unlock(self.room, proof="tag-door-101", attendance_action="check_in")
+        self.assertEqual(duplicate.status_code, 400)
+        second = self.unlock(self.room, proof="tag-door-101", attendance_action="check_out")
+        self.assertEqual(second.data["attendance"], "checked_out")
+        third = self.unlock(self.room, proof="tag-door-101", attendance_action="check_in")
+        self.assertEqual(third.data["attendance"], "checked_in")
         self.assertEqual(Attendance.objects.filter(employee=self.aline).count(), 1)
+        self.assertEqual(AttendanceVisit.objects.filter(attendance=attendance).count(), 2)
 
         other = Room.objects.create(business=self.business, name="Office", building="Main", floor="2",
                                     door_identifier="office")

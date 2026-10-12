@@ -2,8 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import heroImage from "./assets/images/hero.jpeg";
 import { ACCESS_TOKEN, REFRESH_TOKEN } from "./constants";
-import { clockMyAttendance, fetchAccount, fetchMyAttendance } from "./api";
-import { positionOrNull } from "./geolocation";
+import { fetchAccount } from "./api";
 import AuthForm from "./AuthForm";
 import EmployeeWorkspace from "./components/EmployeeWorkspace";
 import EmployerWorkspace from "./components/EmployerWorkspace";
@@ -263,18 +262,6 @@ function App() {
   // Signing in starts the employee's day shift; the server refuses it when they
   // are on leave, already checked in, or not yet allowed to clock in.
   async function handleSignIn(access, profile, refresh) {
-    if (!profile.can_manage && !profile.can_admin && profile.has_employee_record
-        && profile.workspace_approved && !profile.must_change_password) {
-      try {
-        const day = await fetchMyAttendance(access);
-        if (!(day.shifts || []).some((item) => item.check_in_at && !item.check_out_at)) {
-          const position = day.workplace_configured ? await positionOrNull(10000) : null;
-          await clockMyAttendance(access, "check_in", "day", new Date().toTimeString().slice(0, 5), position);
-        }
-      } catch {
-        // Signing in never depends on the automatic check-in.
-      }
-    }
     handleAuthenticated(access, profile, refresh);
   }
 

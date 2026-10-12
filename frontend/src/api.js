@@ -235,22 +235,6 @@ export function fetchMyAttendance(token) {
   return request("/api/me/attendance/", { token });
 }
 
-export function clockMyAttendance(token, action, shift = "day", time, position = null) {
-  return request("/api/me/attendance/", { method: "POST", token, body: { action, shift, time, ...(position || {}) } });
-}
-
-export function fetchWorkplaceLocation(token) {
-  return request("/api/workplace-location/", { token });
-}
-
-export function saveWorkplaceLocation(token, body) {
-  return request("/api/workplace-location/", { method: "PUT", token, body });
-}
-
-export function updateWorkplaceRadius(token, radius_m) {
-  return request("/api/workplace-location/", { method: "PATCH", token, body: { radius_m } });
-}
-
 export function fetchMyLeave(token) {
   return request("/api/me/leave/", { token });
 }

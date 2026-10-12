@@ -221,6 +221,21 @@ class Attendance(models.Model):
         constraints = [models.UniqueConstraint(fields=["employee", "date", "shift"], name="unique_employee_attendance_shift")]
 
 
+class AttendanceVisit(models.Model):
+    """One continuous period an employee spent inside the office."""
+
+    attendance = models.ForeignKey(Attendance, on_delete=models.CASCADE, related_name="visits")
+    check_in_at = models.DateTimeField()
+    check_out_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["check_in_at", "id"]
+        constraints = [models.UniqueConstraint(
+            fields=["attendance"], condition=models.Q(check_out_at__isnull=True),
+            name="unique_open_visit_per_attendance",
+        )]
+
+
 class WorkplaceLocation(models.Model):
     """The office an employer saved; attendance within `radius_m` counts as inside."""
 

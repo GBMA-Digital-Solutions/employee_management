@@ -7,7 +7,7 @@ they were granted the room, and only then proximity and the door itself
 through `door_hardware`. Every attempt is recorded, granted or not.
 """
 import logging
-from datetime import timedelta
+from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import transaction
 from django.db.models import Count, Q
@@ -24,7 +24,8 @@ from rest_framework.views import APIView
 
 from . import door_hardware
 from .accounts import employee_has_approved_contract, employee_record, require_signed_contract, workspace_responses
-from .models import Attendance, Employee, Room, RoomAccessAttempt, RoomAccessGrant, RoomPermissionChange
+from .models import (Attendance, AttendanceVisit, Employee, Room, RoomAccessAttempt, RoomAccessGrant,
+                     RoomPermissionChange)
 from .permissions import IsManager, business_id_for, can_manage, is_admin
 from .schema import RESPONSE_400, RESPONSE_401, RESPONSE_404, DetailSerializer, with_errors
 
@@ -197,6 +198,9 @@ class UnlockRequestSerializer(serializers.Serializer):
     distance_cm = serializers.FloatField(
         required=False, min_value=0, max_value=10000,
         help_text="How far the phone measured itself from the door. Required by doors with a range limit.")
+    attendance_action = serializers.ChoiceField(
+        choices=["check_in", "check_out"], required=False,
+        help_text="Required for an employee using the official check-in door.")
 
 
 UnlockResultSerializer = inline_serializer(name="UnlockResult", fields={
@@ -207,38 +211,51 @@ UnlockResultSerializer = inline_serializer(name="UnlockResult", fields={
 })
 
 
-def record_door_check_in(room, user):
-    """Create today's day-shift attendance once after an employee opens the designated door."""
-    if not room.is_check_in_door:
-        return None
-    employee = employee_record(user)
-    if employee is None:
-        return None
+def validate_attendance_action(employee, action):
+    active = AttendanceVisit.objects.filter(
+        attendance__employee=employee, check_out_at__isnull=True,
+    ).exists()
+    if action == "check_in" and active:
+        raise serializers.ValidationError("You are already checked in. Scan again and check out first.")
+    if action == "check_out" and not active:
+        raise serializers.ValidationError("You are already checked out. Scan again and check in first.")
+
+
+def record_door_attendance(employee, action):
+    """Apply one alternating QR attendance event and update the daily aggregate."""
     now = timezone.now()
     date = timezone.localdate(now)
     with transaction.atomic():
-        existing = Attendance.objects.select_for_update().filter(
-            employee=employee, date__gte=date - timedelta(days=1),
-            check_in_at__isnull=False, check_out_at__isnull=True,
-        ).order_by("-date", "-id").first()
-        if existing:
-            return "already_checked_in"
-        attendance, _ = Attendance.objects.select_for_update().get_or_create(
-            employee=employee, date=date, shift="day",
-        )
-        if attendance.check_in_at:
-            return "already_checked_in"
+        active = AttendanceVisit.objects.select_for_update().filter(
+            attendance__employee=employee, check_out_at__isnull=True,
+        ).select_related("attendance").first()
+        if action == "check_in":
+            if active:
+                raise serializers.ValidationError("You are already checked in. Scan again and check out first.")
+            attendance, _ = Attendance.objects.select_for_update().get_or_create(
+                employee=employee, date=date, shift="day",
+            )
+            AttendanceVisit.objects.create(attendance=attendance, check_in_at=now)
+            attendance.status = "present"
+            attendance.check_in_at = attendance.check_in_at or now
+            attendance.check_out_at = None
+            attendance.save(update_fields=["status", "check_in_at", "check_out_at"])
+            return "checked_in"
+        if not active:
+            raise serializers.ValidationError("You are already checked out. Scan again and check in first.")
+        active.check_out_at = now
+        active.save(update_fields=["check_out_at"])
+        attendance = active.attendance
+        completed = attendance.visits.exclude(check_out_at=None)
+        seconds = sum((visit.check_out_at - visit.check_in_at).total_seconds() for visit in completed)
+        attendance.check_out_at = now
         attendance.status = "present"
-        attendance.hours_worked = 0
-        attendance.check_in_at = now
-        attendance.check_out_at = None
-        attendance.check_in_location_status = "inside"
-        attendance.check_in_latitude = None
-        attendance.check_in_longitude = None
-        attendance.check_in_distance_m = None
-        attendance.check_in_accuracy_m = None
-        attendance.save()
-    return "checked_in"
+        attendance.hours_worked = min(
+            Decimal("24.00"),
+            (Decimal(str(seconds)) / Decimal("3600")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        )
+        attendance.save(update_fields=["check_out_at", "status", "hours_worked"])
+        return "checked_out"
 
 
 # --- Employer -------------------------------------------------------------------
@@ -492,6 +509,14 @@ class RoomUnlockView(APIView):
             raise NotFound("No room matches the given query.")
         if reason:
             return deny(reason)
+        employee = employee_record(user)
+        attendance_action = serializer.validated_data.get("attendance_action")
+        if room.is_check_in_door and employee is not None:
+            if not attendance_action:
+                raise serializers.ValidationError({
+                    "attendance_action": "Choose check in or check out before scanning this door.",
+                })
+            validate_attendance_action(employee, attendance_action)
         gateway = door_hardware.gateway_for(room)
         if not gateway.configured:
             return deny("hardware_not_configured", status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -512,12 +537,14 @@ class RoomUnlockView(APIView):
                                        "The door may still be locked."}, status=status.HTTP_502_BAD_GATEWAY)
         unlock_status = "confirmed" if confirmed else "unconfirmed"
         record("granted", unlock_status=unlock_status)
-        attendance = record_door_check_in(room, user)
+        attendance = record_door_attendance(employee, attendance_action) if (
+            room.is_check_in_door and employee is not None
+        ) else None
         detail = "Door unlocked." if confirmed else "Unlock sent to the door."
         if attendance == "checked_in":
-            detail += " You are checked in for today."
-        elif attendance == "already_checked_in":
-            detail += " You were already checked in."
+            detail += " You are now checked in."
+        elif attendance == "checked_out":
+            detail += " You are now checked out."
         return Response({"detail": detail, "result": "granted", "unlock_status": unlock_status,
                          "attendance": attendance})
 

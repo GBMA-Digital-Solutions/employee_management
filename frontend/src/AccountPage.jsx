@@ -8,9 +8,7 @@ import ModalDialog from "./components/ModalDialog";
 import ChangePasswordDialog from "./components/ChangePasswordDialog";
 import DashboardTopNav from "./components/DashboardTopNav";
 import { useConfirm } from "./components/ConfirmDialog";
-import LocationStatus from "./components/LocationStatus";
-import { locationText, positionOrNull } from "./geolocation";
-import { acknowledgeMyContractTermination, cancelMyLeave, clockMyAttendance, fetchAccount, fetchMyAnnouncements, fetchMyAttendance, fetchMyCalendar, fetchMyContracts, fetchMyLeave, fetchMyPhoto, fetchMyProfile, markAllMyAnnouncementsRead, markAllMyCalendarRead, markMyAnnouncementRead, markMyCalendarEventRead, requestMyContractTermination, saveMyProfile, signMyContract, submitMyLeave, updateMyLeave } from "./api";
+import { acknowledgeMyContractTermination, cancelMyLeave, fetchAccount, fetchMyAnnouncements, fetchMyAttendance, fetchMyCalendar, fetchMyContracts, fetchMyLeave, fetchMyPhoto, fetchMyProfile, markAllMyAnnouncementsRead, markAllMyCalendarRead, markMyAnnouncementRead, markMyCalendarEventRead, requestMyContractTermination, saveMyProfile, signMyContract, submitMyLeave, updateMyLeave } from "./api";
 import { decisionText, label, longDate, money, today } from "./managerConfig";
 
 // The employer supplies only name, job title and email. Everything here is the
@@ -156,89 +154,46 @@ function timeOf(value) {
   return value ? new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Not recorded";
 }
 
-function currentClockTime() {
-  return new Date().toTimeString().slice(0, 5);
-}
-
-function runningTime(start, now) {
-  if (!now) return "00:00:00";
-  const seconds = Math.max(0, Math.floor((now - new Date(start).getTime()) / 1000));
-  const hours = String(Math.floor(seconds / 3600)).padStart(2, "0");
-  const minutes = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
-  return `${hours}:${minutes}:${String(seconds % 60).padStart(2, "0")}`;
-}
-
 function TimeClockCard({ token }) {
   const [day, setDay] = useState(null);
   const [shift, setShift] = useState("day");
-  const [checkInTime, setCheckInTime] = useState(currentClockTime);
-  const [checkOutTime, setCheckOutTime] = useState(currentClockTime);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [now, setNow] = useState(0);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    fetchMyAttendance(token).then((result) => {
+    const load = () => fetchMyAttendance(token).then((result) => {
       if (!cancelled) {
         setDay(result);
-        if ((result.shifts || []).some((item) => item.shift === "night" && !item.check_out_at)) setShift("night");
+        if ((result.shifts || []).some((item) => item.shift === "night" && item.visits?.some((visit) => !visit.check_out_at))) setShift("night");
       }
-    })
-      .catch((err) => { if (!cancelled) setError(err.message); });
-    return () => { cancelled = true; };
+    }).catch((err) => { if (!cancelled) setError(err.message); });
+    load();
+    const timer = window.setInterval(load, 3000);
+    return () => { cancelled = true; window.clearInterval(timer); };
   }, [token]);
-
-  async function clock(action) {
-    if (busy) return;
-    setBusy(true);
-    setError("");
-    setNotice("");
-    try {
-      if (day?.workplace_configured) setBusy("locating");
-      const position = day?.workplace_configured ? await positionOrNull() : null;
-      setBusy(true);
-      const result = await clockMyAttendance(token, action, shift, action === "check_in" ? checkInTime : checkOutTime, position);
-      setDay(result);
-      const where = locationText(result.attendance, action);
-      setNotice(`${label(shift)} shift ${action === "check_in" ? "started" : "completed"}${where ? ` · ${where}` : ""}.`);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
 
   const shifts = day?.shifts || (day?.attendance ? [day.attendance] : []);
   const attendance = shifts.find((item) => item.shift === shift);
-  const checkedIn = Boolean(attendance?.check_in_at);
-  const checkedOut = Boolean(attendance?.check_out_at);
+  const visits = attendance?.visits || [];
+  const activeVisit = visits.find((visit) => !visit.check_out_at);
   return <section className="panel account-panel time-clock-card" id="attendance">
     <div className="time-clock-heading"><div><p className="eyebrow dark-eyebrow">TODAY</p><h3>{label(shift)} shift</h3></div>
-      <span className={`status-badge ${checkedOut ? "status-signed" : checkedIn ? "status-sent" : "status-draft"}`}>{checkedOut ? "Shift completed" : checkedIn ? "Checked in" : "Not checked in"}</span>
+      <span className={`status-badge ${activeVisit ? "status-sent" : attendance ? "status-signed" : "status-draft"}`}>{activeVisit ? "In office" : attendance ? "Outside office" : "Not checked in"}</span>
     </div>
     <p>{day?.date ? longDate(day.date) : "Loading today’s attendance…"}</p>
     <div className="shift-tabs" aria-label="Choose attendance shift">
-      {["day", "night"].map((item) => <button key={item} className={shift === item ? "active" : ""} type="button" onClick={() => { setShift(item); setError(""); setNotice(""); }}>{label(item)} shift</button>)}
+      {["day", "night"].map((item) => <button key={item} className={shift === item ? "active" : ""} type="button" onClick={() => { setShift(item); setError(""); }}>{label(item)} shift</button>)}
     </div>
     {error && <p className="message error" role="alert">{error}</p>}
-    {notice && <p className="message success" role="status">{notice}</p>}
-    {day?.workplace_configured && !checkedOut && <p className="muted">Your location is checked against the office area ({day.workplace_radius_m} m) when you check in or out.</p>}
+    <p className="message">To check in or out, open the official check-in room, choose the action, and scan its QR code.</p>
     {attendance && <dl className="clock-times">
-      <dt>Check-in</dt><dd>{timeOf(attendance?.check_in_at)} <LocationStatus record={attendance} prefix="check_in" /></dd>
-      <dt>Check-out</dt><dd>{timeOf(attendance?.check_out_at)} <LocationStatus record={attendance} prefix="check_out" /></dd>
-      <dt>Hours worked</dt><dd>{checkedOut ? attendance.hours_worked : runningTime(attendance.check_in_at, now)}</dd>
+      <dt>First check-in</dt><dd>{timeOf(attendance.check_in_at)}</dd>
+      <dt>Latest check-out</dt><dd>{timeOf(attendance.check_out_at)}</dd>
+      <dt>Completed time in office</dt><dd>{attendance.hours_worked} hours</dd>
+      <dt>Time out of office</dt><dd>{attendance.time_out_hours} hours</dd>
     </dl>}
-    {checkedIn && !checkedOut && <div className="live-shift-timer" aria-live="off"><span>Time in office</span><strong>{runningTime(attendance.check_in_at, now)}</strong><small>Counting live</small></div>}
-    {day && !checkedIn && <div className="shift-clock-action"><label htmlFor={`${shift}-check-in-time`}>Check-in time</label><input id={`${shift}-check-in-time`} type="time" value={checkInTime} onChange={(event) => setCheckInTime(event.target.value)} /><button className="button button-coral" disabled={busy || !checkInTime} type="button" onClick={() => clock("check_in")}>{busy === "locating" ? "Checking location…" : busy ? "Checking in…" : "Check in"}</button></div>}
-    {day && checkedIn && !checkedOut && <div className="shift-clock-action"><label htmlFor={`${shift}-check-out-time`}>Check-out time</label><input id={`${shift}-check-out-time`} type="time" value={checkOutTime} onChange={(event) => setCheckOutTime(event.target.value)} /><button className="button button-coral" disabled={busy || !checkOutTime} type="button" onClick={() => clock("check_out")}>{busy === "locating" ? "Checking location…" : busy ? "Checking out…" : "Check out"}</button></div>}
-    {day && <div className="shift-day-summary"><strong>Total hours today: {day.total_hours || "0.00"}</strong>{shifts.length > 0 && <div>{shifts.map((item) => <span key={item.id}>{label(item.shift)}: {item.check_out_at ? `${item.hours_worked} hours` : "In progress"}</span>)}</div>}</div>}
+    {visits.length > 0 && <div className="attendance-visits"><strong>Office visits</strong>{visits.map((visit, index) => <div key={visit.id}><span>Visit {index + 1}</span><span>{timeOf(visit.check_in_at)} to {visit.check_out_at ? timeOf(visit.check_out_at) : "Now"}</span></div>)}</div>}
+    {day && <div className="shift-day-summary"><strong>Total completed time today: {day.total_hours || "0.00"} hours</strong></div>}
   </section>;
 }
 
@@ -546,43 +501,11 @@ export default function AccountPage({ account, token, onAccountChange, onLogout 
   const [contractAttention, setContractAttention] = useState(0);
   const [announcements, setAnnouncements] = useState([]);
   const [calendarEvents, setCalendarEvents] = useState([]);
-  const [signOutPrompt, setSignOutPrompt] = useState(null);
   const view = employeeViewFromLocation(location);
   const forced = Boolean(account.must_change_password);
   const contractLocked = Boolean(account.has_employee_record && !account.workspace_approved);
 
-  // An employee still on shift chooses whether signing out also checks them out.
-  async function requestSignOut() {
-    if (!account.has_employee_record || !account.workspace_approved || forced) { onLogout(); return; }
-    try {
-      const day = await fetchMyAttendance(token);
-      const active = (day.shifts || []).find((item) => item.check_in_at && !item.check_out_at);
-      if (active) { setSignOutPrompt({ attendance: active, locate: day.workplace_configured, busy: false, error: "" }); return; }
-    } catch {
-      // Attendance is unavailable; signing out still goes ahead.
-    }
-    onLogout();
-  }
-
-  async function checkOutAndSignOut() {
-    setSignOutPrompt((current) => ({ ...current, busy: true, error: "" }));
-    try {
-      const position = signOutPrompt.locate ? await positionOrNull() : null;
-      await clockMyAttendance(token, "check_out", signOutPrompt.attendance.shift, currentClockTime(), position);
-      onLogout();
-    } catch (err) {
-      setSignOutPrompt((current) => current && { ...current, busy: false, error: err.message });
-    }
-  }
-
-  const signOutDialog = signOutPrompt && <ModalDialog title="Sign out" onClose={() => { if (!signOutPrompt.busy) setSignOutPrompt(null); }}><section className="record-form">
-    <p>You are still checked in to the {label(signOutPrompt.attendance.shift).toLowerCase()} shift since {timeOf(signOutPrompt.attendance.check_in_at)}. Do you want to check out before signing out?</p>
-    {signOutPrompt.error && <p className="message error" role="alert">{signOutPrompt.error}</p>}
-    <div className="form-actions">
-      <button className="button button-coral" type="button" disabled={signOutPrompt.busy} onClick={checkOutAndSignOut}>{signOutPrompt.busy ? "Checking out…" : "Check out and sign out"}</button>
-      <button className="button button-outline" type="button" disabled={signOutPrompt.busy} onClick={onLogout}>Sign out without checking out</button>
-    </div>
-  </section></ModalDialog>;
+  const requestSignOut = onLogout;
 
   const load = useCallback(() => {
     if (!account.has_employee_record || contractLocked) return;
@@ -720,6 +643,5 @@ export default function AccountPage({ account, token, onAccountChange, onLogout 
     {profile && view === "access-control" && <AccessControl token={token} role="employee" />}
 
     </section></main>
-    {signOutDialog}
   </>;
 }

@@ -31,7 +31,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from PIL import Image, UnidentifiedImageError
 
 from . import leave_management, onboarding
-from .models import (AccountProfile, Announcement, AnnouncementRead, Attendance, Business,
+from .models import (AccountProfile, Announcement, AnnouncementRead, Attendance, AttendanceVisit, Business,
                      CalendarEvent, CalendarEventRead, Contract, ContractTerminationRequest, Employee,
                      InvitationEmailSettings, LeaveBalance, LeaveRequest, WorkplaceLocation)
 from .permissions import can_manage, is_admin
@@ -843,12 +843,26 @@ class MyCalendarReadAllView(APIView):
             events, many=True, context={"employee": employee}).data)
 
 
+class AttendanceVisitSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AttendanceVisit
+        fields = ["id", "check_in_at", "check_out_at"]
+
+
 class MyAttendanceSerializer(serializers.ModelSerializer):
+    visits = AttendanceVisitSerializer(many=True, read_only=True)
+    time_out_hours = serializers.SerializerMethodField()
+
     class Meta:
         model = Attendance
         fields = ["id", "date", "shift", "status", "hours_worked", "check_in_at", "check_out_at",
-                  "check_in_location_status", "check_in_distance_m", "check_out_location_status",
-                  "check_out_distance_m"]
+                  "visits", "time_out_hours"]
+
+    def get_time_out_hours(self, obj):
+        visits = list(obj.visits.all())
+        seconds = sum(max(0, (later.check_in_at - earlier.check_out_at).total_seconds())
+                      for earlier, later in zip(visits, visits[1:]) if earlier.check_out_at)
+        return f"{Decimal(str(seconds)) / Decimal('3600'):.2f}"
 
 
 class AttendanceClockSerializer(PositionSerializer):
@@ -906,14 +920,11 @@ class MyAttendanceView(APIView):
         shifts = list(Attendance.objects.filter(employee=employee, date=date).order_by("id"))
         attendance = next((item for item in shifts if item.shift == selected_shift), None)
         total = sum((item.hours_worked for item in shifts), Decimal("0.00"))
-        workplace = WorkplaceLocation.objects.filter(business_id=employee.business_id).first()
         return {
             "date": date,
             "attendance": MyAttendanceSerializer(attendance).data if attendance else None,
             "shifts": MyAttendanceSerializer(shifts, many=True).data,
             "total_hours": f"{total:.2f}",
-            "workplace_configured": workplace is not None,
-            "workplace_radius_m": workplace.radius_m if workplace else None,
         }
 
     def get(self, request):

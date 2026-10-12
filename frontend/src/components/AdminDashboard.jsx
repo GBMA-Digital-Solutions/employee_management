@@ -218,10 +218,9 @@ const recordKinds = {
   announcements: { title: "Announcements", columns: modules.announcements.columns },
   "calendar-events": { title: "Calendar", columns: [{ title: "Event", value: (row) => row.title }, { title: "Category", value: (row) => label(row.category) }, { title: "Date", value: (row) => row.end_date && row.end_date !== row.date ? `${row.date} → ${row.end_date}` : row.date }, { title: "Location", value: (row) => row.location }, { title: "Who", value: (row) => row.all_employees ? "Everyone" : `${row.employee_ids.length} invited` }] },
   holidays: { title: "Holidays", columns: modules.holidays.columns },
-  "workplace-locations": { title: "Workplace location", columns: [{ title: "Coordinates", value: (row) => `${row.latitude}, ${row.longitude}` }, { title: "Radius", value: (row) => `${row.radius_m} m` }, { title: "Updated", value: (row) => whenCreated(row.updated_at) }, { title: "Updated by", value: (row) => row.updated_by }] },
 };
 const employeeRecordKinds = ["contracts", "attendance", "leave", "leave-balances", "salaries", "payroll", "salary-advances", "salary-advance-requests", "asset-incidents", "calendar-events"];
-const companyRecordKinds = ["employees", ...employeeRecordKinds, "announcements", "holidays", "workplace-locations"];
+const companyRecordKinds = ["employees", ...employeeRecordKinds, "announcements", "holidays"];
 const hiddenRecordKeys = new Set(["id", "employee", "business", "employee_ids", "photo", "contract_document", "latest_contract",
   "invite", "document", "evidence", "signature_data", "revision_of", "payroll", "advance", "salary_advance", "asset_incident"]);
 
