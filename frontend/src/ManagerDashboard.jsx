@@ -306,15 +306,14 @@ function ResourcePage({ resource, data, token, account, onChange, onAuthError })
     .map((person) => {
       const attendance = data.attendance || [];
       const datedRecords = attendance.filter((row) => row.employee === person.id && row.date === rosterDate);
-      // An open shift from yesterday is still active today (most commonly a
-      // night shift). Show it on today's live roster just as the employee
-      // workspace does, instead of incorrectly saying nobody is checked in.
+      // Attendance visits are the source of truth for whether someone is
+      // currently inside. Always surface an open visit on today's roster,
+      // even when it began before midnight or belongs to a legacy workday.
       const carriedActive = rosterDate === today() ? attendance.find((row) =>
-        row.employee === person.id && row.date === shiftDate(rosterDate, -1)
-        && row.check_in_at && !row.check_out_at) : null;
+        row.employee === person.id && row.visits?.some((visit) => !visit.check_out_at)) : null;
       const records = carriedActive && !datedRecords.some((row) => row.id === carriedActive.id)
         ? [carriedActive, ...datedRecords] : datedRecords;
-      const activeRecord = records.find((row) => row.check_in_at && !row.check_out_at) || null;
+      const activeRecord = records.find((row) => row.visits?.some((visit) => !visit.check_out_at)) || null;
       const record = activeRecord || records.find((row) => row.shift === "day") || records[0] || null;
       const totalHours = records.reduce((sum, row) => sum + Number(row.hours_worked || 0), 0).toFixed(2);
       const onLeave = (data.leave || []).some((row) => row.status === "approved" && row.employee === person.id && row.start_date <= rosterDate && row.end_date >= rosterDate);
