@@ -156,15 +156,21 @@ function Person({ name, email }) {
 
 // --- Rooms & Doors --------------------------------------------------------------
 
-function RoomForm({ token, room, onClose, onSaved }) {
-  const [form, setForm] = useState(room ? { name: room.name, building: room.building, floor: room.floor, door_identifier: room.door_identifier } : emptyRoom);
+function RoomForm({ token, room, currentCheckInDoor, onClose, onSaved }) {
+  const [form, setForm] = useState(room ? { name: room.name, building: room.building, floor: room.floor, door_identifier: room.door_identifier, is_check_in_door: room.is_check_in_door } : { ...emptyRoom, is_check_in_door: false });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [confirm, confirmation] = useConfirm();
   const bind = (name) => ({ id: `room-${name}`, name, value: form[name], required: true,
     onChange: (event) => setForm((current) => ({ ...current, [name]: event.target.value })) });
 
   async function submit(event) {
     event.preventDefault();
+    if (form.is_check_in_door && currentCheckInDoor && currentCheckInDoor.id !== room?.id && !await confirm({
+      title: "Replace check-in door?",
+      message: `${currentCheckInDoor.name} is currently the official check-in door. Replace it with ${form.name}?`,
+      confirmLabel: "Replace check-in door",
+    })) return;
     setBusy(true);
     setError("");
     try { onSaved(await saveRoom(token, form, room?.id)); } catch (err) { setError(err.message); } finally { setBusy(false); }
@@ -178,12 +184,22 @@ function RoomForm({ token, room, onClose, onSaved }) {
         <div><label htmlFor="room-door_identifier">Door / device identifier</label><input {...bind("door_identifier")} maxLength="100" placeholder="DOOR-101" /></div>
         <div><label htmlFor="room-building">Building</label><input {...bind("building")} maxLength="100" placeholder="Main Building" /></div>
         <div><label htmlFor="room-floor">Floor</label><input {...bind("floor")} maxLength="30" placeholder="1" /></div>
+        <div className="field-wide room-attendance-choice">
+          <label htmlFor="room-is-check-in">What should happen when an employee opens this door?</label>
+          <select id="room-is-check-in" value={form.is_check_in_door ? "check_in" : "access_only"}
+            onChange={(event) => setForm((current) => ({ ...current, is_check_in_door: event.target.value === "check_in" }))}>
+            <option value="access_only">Open the door only, do not check in</option>
+            <option value="check_in">Open the door and check the employee in</option>
+          </select>
+        </div>
       </div>
+      <p className="field-hint">Only one room can be the official check-in door. Choosing check-in here replaces the current one after confirmation.</p>
       <div className="form-actions">
         <button className="button button-coral" type="submit">{busy ? "Saving…" : room ? "Save room" : "Add room"}</button>
         <button className="button button-outline" type="button" onClick={onClose}>Cancel</button>
       </div>
     </fieldset></form>
+    {confirmation}
   </ModalDialog>;
 }
 
@@ -323,6 +339,7 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
       {admin && <div><dt>Company</dt><dd>{selected.business_name}</dd></div>}
       {!admin && !employer && <div><dt>Your access</dt><dd>{selected.can_unlock ? "Granted" : "Not granted"}</dd></div>}
       {(employer || admin) && <div><dt>Door</dt><dd>{selected.door_identifier}</dd></div>}
+      <div><dt>Attendance</dt><dd>{selected.is_check_in_door ? "Official check-in door" : "Access only"}</dd></div>
       {(employer || admin) && <div><dt>Authorized users</dt><dd>{selected.authorized_users} {selected.authorized_users === 1 ? "employee" : "employees"}</dd></div>}
       <div><dt>Door hardware</dt><dd>{DEVICE_STATUS[selected.device_status] || selected.device_status}</dd></div>
     </dl>
@@ -366,11 +383,13 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
           className={`room-tile${room.id === selectedId ? " selected" : ""}${role === "employee" && !room.can_unlock ? " locked" : ""}`}
           onClick={() => { setSelectedId(room.id === selectedId ? null : room.id); setError(""); setNotice(""); }}>
           <DoorIcon />
-          <span>{room.name}{role === "employee" && <small>{room.can_unlock ? "Access granted" : "No access"}</small>}</span>
+          <span>{room.name}{room.is_check_in_door && <small>Check-in door</small>}{role === "employee" && <small>{room.can_unlock ? "Access granted" : "No access"}</small>}</span>
         </button>)}</div>
         {selected && list.includes(selected) && detail}
       </section>)}
-    {editing && <RoomForm token={token} room={editing.id ? editing : null} onClose={() => setEditing(null)} onSaved={(saved) => {
+    {editing && <RoomForm token={token} room={editing.id ? editing : null}
+      currentCheckInDoor={rooms.rows.find((room) => room.is_check_in_door) || null}
+      onClose={() => setEditing(null)} onSaved={(saved) => {
       setEditing(null);
       setSelectedId(saved.id);
       setNotice(`${saved.name} saved.`);

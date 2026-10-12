@@ -88,6 +88,9 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .checkbox-field { display: flex; align-items: center; gap: 12px; padding-top: 24px; }
 .checkbox-field label { margin: 0; }
 .checkbox-field input { width: 20px; min-height: 20px; accent-color: var(--burgundy); }
+.room-attendance-choice { margin-top: 18px; padding: 16px; border: 1px solid #d9cfbd; border-radius: 8px; background: #fff8e7; }
+.room-attendance-choice label { margin-bottom: 8px; color: var(--burgundy); font-weight: 800; }
+.room-attendance-choice select { border-color: #ad856f; font-weight: 700; }
 .records-toolbar, .records-filters { display: flex; align-items: center; gap: 12px; }
 .records-toolbar { justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; }
 .records-filters { flex-wrap: wrap; }

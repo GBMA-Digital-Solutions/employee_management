@@ -593,6 +593,9 @@ class Room(models.Model):
     floor = models.CharField(max_length=30)
     # The identifier of the door controller fitted to this room.
     door_identifier = models.CharField(max_length=100)
+    # A successful employee unlock at this door also records attendance.
+    # There may be only one official check-in door for each business.
+    is_check_in_door = models.BooleanField(default=False)
     created_by = models.CharField(max_length=200, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -601,6 +604,8 @@ class Room(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["business", "door_identifier"], name="unique_business_door_identifier"),
             models.UniqueConstraint(fields=["business", "building", "floor", "name"], name="unique_business_room"),
+            models.UniqueConstraint(fields=["business"], condition=models.Q(is_check_in_door=True),
+                                    name="unique_business_check_in_door"),
         ]
 
     def __str__(self):

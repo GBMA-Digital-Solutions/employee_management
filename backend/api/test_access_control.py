@@ -8,7 +8,7 @@ from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from .door_hardware import DoorGateway
-from .models import (AccountProfile, Business, Contract, Employee, Room, RoomAccessAttempt, RoomAccessGrant,
+from .models import (AccountProfile, Attendance, Business, Contract, Employee, Room, RoomAccessAttempt, RoomAccessGrant,
                      RoomPermissionChange, SimulatedDoor)
 from .onboarding import purge_employee
 from .platform import purge_business
@@ -101,6 +101,21 @@ class AccessControlTests(APITestCase):
             self.assertEqual(self.client.post("/api/access-control/rooms/", {
                 "name": "Mine", "building": "Main", "floor": "1", "door_identifier": "x"}, format="json").status_code, 403)
         self.assertTrue(Room.objects.filter(pk=self.room.pk, name="Boardroom").exists())
+
+    def test_employer_can_replace_the_one_check_in_door(self):
+        self.as_user(self.employer)
+        first = self.client.patch(
+            f"/api/access-control/rooms/{self.room.pk}/", {"is_check_in_door": True}, format="json")
+        self.assertEqual(first.status_code, 200, first.data)
+        replacement = self.client.post("/api/access-control/rooms/", {
+            "name": "Reception", "building": "Main", "floor": "0",
+            "door_identifier": "reception", "is_check_in_door": True,
+        }, format="json")
+        self.assertEqual(replacement.status_code, 201, replacement.data)
+        self.room.refresh_from_db()
+        self.assertFalse(self.room.is_check_in_door)
+        self.assertTrue(Room.objects.get(pk=replacement.data["id"]).is_check_in_door)
+        self.assertEqual(Room.objects.filter(business=self.business, is_check_in_door=True).count(), 1)
 
     # --- Permissions ---------------------------------------------------------
 
@@ -234,6 +249,31 @@ class AccessControlTests(APITestCase):
             ("boss@example.com", "granted", "", "unconfirmed"),
             ("boss@example.com", "granted", "", "failed"),
         ])
+
+    @override_settings(DOOR_GATEWAY=FAKE_GATEWAY)
+    def test_check_in_door_unlock_records_attendance_once(self):
+        self.room.is_check_in_door = True
+        self.room.save(update_fields=["is_check_in_door"])
+        RoomAccessGrant.objects.create(room=self.room, employee=self.aline)
+        self.as_user(self.aline_user)
+
+        first = self.unlock(self.room, proof="tag-door-101")
+        self.assertEqual((first.status_code, first.data["attendance"]), (200, "checked_in"))
+        attendance = Attendance.objects.get(employee=self.aline, date=timezone.localdate(), shift="day")
+        self.assertIsNotNone(attendance.check_in_at)
+        self.assertEqual(attendance.check_in_location_status, "inside")
+
+        second = self.unlock(self.room, proof="tag-door-101")
+        self.assertEqual(second.data["attendance"], "already_checked_in")
+        self.assertEqual(Attendance.objects.filter(employee=self.aline).count(), 1)
+
+        other = Room.objects.create(business=self.business, name="Office", building="Main", floor="2",
+                                    door_identifier="office")
+        RoomAccessGrant.objects.create(room=other, employee=self.bosco)
+        self.as_user(self.bosco_user)
+        opened = self.unlock(other, proof="tag-office")
+        self.assertIsNone(opened.data["attendance"])
+        self.assertFalse(Attendance.objects.filter(employee=self.bosco).exists())
 
     @override_settings(DOOR_GATEWAY=FAKE_GATEWAY)
     def test_revoked_inactive_and_unapproved_employees_cannot_unlock(self):

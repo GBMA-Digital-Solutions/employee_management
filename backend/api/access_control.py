@@ -7,9 +7,11 @@ they were granted the room, and only then proximity and the door itself
 through `door_hardware`. Every attempt is recorded, granted or not.
 """
 import logging
+from datetime import timedelta
 
 from django.db import transaction
 from django.db.models import Count, Q
+from django.utils import timezone
 from drf_spectacular.utils import (OpenApiParameter, OpenApiResponse, extend_schema, extend_schema_view,
                                    inline_serializer)
 from rest_framework import mixins, serializers, status, viewsets
@@ -22,7 +24,7 @@ from rest_framework.views import APIView
 
 from . import door_hardware
 from .accounts import employee_has_approved_contract, employee_record, require_signed_contract, workspace_responses
-from .models import Employee, Room, RoomAccessAttempt, RoomAccessGrant, RoomPermissionChange
+from .models import Attendance, Employee, Room, RoomAccessAttempt, RoomAccessGrant, RoomPermissionChange
 from .permissions import IsManager, business_id_for, can_manage, is_admin
 from .schema import RESPONSE_400, RESPONSE_401, RESPONSE_404, DetailSerializer, with_errors
 
@@ -54,7 +56,7 @@ class RoomSerializer(serializers.ModelSerializer):
     class Meta:
         model = Room
         fields = ["id", "business", "business_name", "name", "building", "floor", "door_identifier",
-                  "created_by", "created_at", "authorized_users", "device_status"]
+                  "is_check_in_door", "created_by", "created_at", "authorized_users", "device_status"]
         read_only_fields = ["business", "created_by", "created_at"]
 
     def get_authorized_users(self, obj) -> int:
@@ -74,6 +76,22 @@ class RoomSerializer(serializers.ModelSerializer):
                          floor__iexact=current("floor")).exists():
             raise serializers.ValidationError({"name": "This building and floor already have a room with this name."})
         return attrs
+
+    @transaction.atomic
+    def create(self, validated_data):
+        if validated_data.get("is_check_in_door"):
+            Room.objects.select_for_update().filter(
+                business_id=self.context["business_id"], is_check_in_door=True,
+            ).update(is_check_in_door=False)
+        return super().create(validated_data)
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        if validated_data.get("is_check_in_door"):
+            Room.objects.select_for_update().filter(
+                business_id=self.context["business_id"], is_check_in_door=True,
+            ).exclude(pk=instance.pk).update(is_check_in_door=False)
+        return super().update(instance, validated_data)
 
 
 def grantable_employees(business_id):
@@ -160,7 +178,7 @@ class MyRoomSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Room
-        fields = ["id", "name", "building", "floor", "can_unlock", "device_status"]
+        fields = ["id", "name", "building", "floor", "is_check_in_door", "can_unlock", "device_status"]
 
     def get_can_unlock(self, obj) -> bool:
         return obj.pk in self.context["granted"]
@@ -185,7 +203,42 @@ UnlockResultSerializer = inline_serializer(name="UnlockResult", fields={
     "detail": serializers.CharField(),
     "result": serializers.ChoiceField(choices=["granted"]),
     "unlock_status": serializers.ChoiceField(choices=["confirmed", "unconfirmed"]),
+    "attendance": serializers.CharField(required=False, allow_null=True),
 })
+
+
+def record_door_check_in(room, user):
+    """Create today's day-shift attendance once after an employee opens the designated door."""
+    if not room.is_check_in_door:
+        return None
+    employee = employee_record(user)
+    if employee is None:
+        return None
+    now = timezone.now()
+    date = timezone.localdate(now)
+    with transaction.atomic():
+        existing = Attendance.objects.select_for_update().filter(
+            employee=employee, date__gte=date - timedelta(days=1),
+            check_in_at__isnull=False, check_out_at__isnull=True,
+        ).order_by("-date", "-id").first()
+        if existing:
+            return "already_checked_in"
+        attendance, _ = Attendance.objects.select_for_update().get_or_create(
+            employee=employee, date=date, shift="day",
+        )
+        if attendance.check_in_at:
+            return "already_checked_in"
+        attendance.status = "present"
+        attendance.hours_worked = 0
+        attendance.check_in_at = now
+        attendance.check_out_at = None
+        attendance.check_in_location_status = "inside"
+        attendance.check_in_latitude = None
+        attendance.check_in_longitude = None
+        attendance.check_in_distance_m = None
+        attendance.check_in_accuracy_m = None
+        attendance.save()
+    return "checked_in"
 
 
 # --- Employer -------------------------------------------------------------------
@@ -459,8 +512,14 @@ class RoomUnlockView(APIView):
                                        "The door may still be locked."}, status=status.HTTP_502_BAD_GATEWAY)
         unlock_status = "confirmed" if confirmed else "unconfirmed"
         record("granted", unlock_status=unlock_status)
-        return Response({"detail": "Door unlocked." if confirmed else "Unlock sent to the door.",
-                         "result": "granted", "unlock_status": unlock_status})
+        attendance = record_door_check_in(room, user)
+        detail = "Door unlocked." if confirmed else "Unlock sent to the door."
+        if attendance == "checked_in":
+            detail += " You are checked in for today."
+        elif attendance == "already_checked_in":
+            detail += " You were already checked in."
+        return Response({"detail": detail, "result": "granted", "unlock_status": unlock_status,
+                         "attendance": attendance})
 
 
 # --- Employee ------------------------------------------------------------------
