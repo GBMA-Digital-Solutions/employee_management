@@ -154,10 +154,27 @@ function timeOf(value) {
   return value ? new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Not recorded";
 }
 
+function visitTime(visits, now) {
+  const seconds = Math.max(0, Math.floor(visits.reduce((total, visit) => {
+    const start = new Date(visit.check_in_at).getTime();
+    const end = visit.check_out_at ? new Date(visit.check_out_at).getTime() : now;
+    return total + Math.max(0, end - start);
+  }, 0) / 1000));
+  const hours = String(Math.floor(seconds / 3600)).padStart(2, "0");
+  const minutes = String(Math.floor((seconds % 3600) / 60)).padStart(2, "0");
+  return `${hours}:${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
 function TimeClockCard({ token }) {
   const [day, setDay] = useState(null);
   const [shift, setShift] = useState("day");
   const [error, setError] = useState("");
+  const [now, setNow] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -192,6 +209,7 @@ function TimeClockCard({ token }) {
       <dt>Completed time in office</dt><dd>{attendance.hours_worked} hours</dd>
       <dt>Time out of office</dt><dd>{attendance.time_out_hours} hours</dd>
     </dl>}
+    {activeVisit && <div className="live-shift-timer" aria-live="off"><span>Time in office</span><strong>{visitTime(visits, now)}</strong><small>Counting live</small></div>}
     {visits.length > 0 && <div className="attendance-visits"><strong>Office visits</strong>{visits.map((visit, index) => <div key={visit.id}><span>Visit {index + 1}</span><span>{timeOf(visit.check_in_at)} to {visit.check_out_at ? timeOf(visit.check_out_at) : "Now"}</span></div>)}</div>}
     {day && <div className="shift-day-summary"><strong>Total completed time today: {day.total_hours || "0.00"} hours</strong></div>}
   </section>;
