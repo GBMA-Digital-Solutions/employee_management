@@ -296,6 +296,23 @@ class AccessControlTests(APITestCase):
         visit = AttendanceVisit.objects.get(attendance__employee=self.aline)
         self.assertIsNotNone(visit.check_out_at)
 
+    @override_settings(DOOR_GATEWAY=FAKE_GATEWAY)
+    def test_room_state_and_scan_out_use_the_same_older_open_attendance(self):
+        self.room.is_check_in_door = True
+        self.room.save(update_fields=["is_check_in_door"])
+        RoomAccessGrant.objects.create(room=self.room, employee=self.aline)
+        attendance = Attendance.objects.create(
+            employee=self.aline, date=timezone.localdate() - timedelta(days=2), shift="day",
+            status="present", check_in_at=timezone.now() - timedelta(days=2),
+        )
+        AttendanceVisit.objects.create(attendance=attendance, check_in_at=attendance.check_in_at)
+        self.as_user(self.aline_user)
+
+        rooms = self.client.get("/api/me/rooms/")
+        self.assertEqual(rooms.data[0]["attendance_state"], "inside")
+        response = self.unlock(self.room, proof="tag-door-101", attendance_action="scan_out")
+        self.assertEqual((response.status_code, response.data["attendance"]), (200, "scan_out"))
+
         other = Room.objects.create(business=self.business, name="Office", building="Main", floor="2",
                                     door_identifier="office")
         RoomAccessGrant.objects.create(room=other, employee=self.bosco)

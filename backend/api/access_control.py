@@ -176,16 +176,21 @@ class RoomAccessAttemptSerializer(serializers.ModelSerializer):
 class MyRoomSerializer(serializers.ModelSerializer):
     can_unlock = serializers.SerializerMethodField(help_text="True when your employer granted you this room.")
     device_status = serializers.SerializerMethodField()
+    attendance_state = serializers.SerializerMethodField()
 
     class Meta:
         model = Room
-        fields = ["id", "name", "building", "floor", "is_check_in_door", "can_unlock", "device_status"]
+        fields = ["id", "name", "building", "floor", "is_check_in_door", "can_unlock", "device_status",
+                  "attendance_state"]
 
     def get_can_unlock(self, obj) -> bool:
         return obj.pk in self.context["granted"]
 
     def get_device_status(self, obj) -> str:
         return door_hardware.device_status(obj, self.context)
+
+    def get_attendance_state(self, obj) -> str:
+        return self.context["attendance_state"]
 
 
 class UnlockRequestSerializer(serializers.Serializer):
@@ -211,20 +216,33 @@ UnlockResultSerializer = inline_serializer(name="UnlockResult", fields={
 })
 
 
-def validate_attendance_action(employee, action):
+def employee_attendance_state(employee):
+    """One shared source of truth for the door UI and unlock validation."""
     today = timezone.localdate()
     attendance = Attendance.objects.filter(employee=employee, date=today, shift="day").first()
-    active = bool(attendance and (
-        attendance.visits.filter(check_out_at__isnull=True).exists()
-        or (attendance.check_in_at and not attendance.check_out_at and not attendance.finalized_at)
-    ))
-    if action == "check_in" and attendance:
+    active_visit = AttendanceVisit.objects.filter(
+        attendance__employee=employee, check_out_at__isnull=True,
+    ).exists()
+    open_attendance = Attendance.objects.filter(
+        employee=employee, check_in_at__isnull=False, check_out_at__isnull=True,
+        finalized_at__isnull=True,
+    ).exists()
+    if active_visit or open_attendance:
+        return "inside"
+    if not attendance:
+        return "not_started"
+    return "completed" if attendance.finalized_at else "outside"
+
+
+def validate_attendance_action(employee, action):
+    state = employee_attendance_state(employee)
+    if action == "check_in" and state != "not_started":
         raise serializers.ValidationError("Check In is only for your first arrival of the workday.")
-    if action == "scan_in" and attendance and (active or attendance.finalized_at):
+    if action == "scan_in" and state not in {"not_started", "outside"}:
         raise serializers.ValidationError("Scan In is only available after a temporary Scan Out.")
-    if action in {"scan_out", "check_out"} and not active:
+    if action in {"scan_out", "check_out"} and state != "inside":
         raise serializers.ValidationError("You must be inside the office before leaving.")
-    if attendance and attendance.finalized_at:
+    if state == "completed":
         raise serializers.ValidationError("This workday has already been closed with Check Out.")
 
 
@@ -236,17 +254,21 @@ def record_door_attendance(employee, action):
         existing = Attendance.objects.select_for_update().filter(
             employee=employee, date=date, shift="day",
         ).first()
+        open_attendance = Attendance.objects.select_for_update().filter(
+            employee=employee, check_in_at__isnull=False, check_out_at__isnull=True,
+            finalized_at__isnull=True,
+        ).order_by("-date", "-id").first()
         # The first entry scan of the day is also the employee's workday Check In.
-        if action == "scan_in" and existing is None:
+        if action == "scan_in" and existing is None and open_attendance is None:
             action = "check_in"
         active = AttendanceVisit.objects.select_for_update().filter(
             attendance__employee=employee, check_out_at__isnull=True,
         ).select_related("attendance").first()
         # Older/manual clock-ins created an Attendance row without a visit. Repair
         # that open state so the employee can Scan Out through the door normally.
-        if (not active and existing and existing.check_in_at and not existing.check_out_at
-                and not existing.finalized_at):
-            active = AttendanceVisit.objects.create(attendance=existing, check_in_at=existing.check_in_at)
+        if not active and open_attendance:
+            active = AttendanceVisit.objects.create(
+                attendance=open_attendance, check_in_at=open_attendance.check_in_at)
         if action in {"check_in", "scan_in"}:
             if active:
                 raise serializers.ValidationError("You are already inside the office.")
@@ -591,7 +613,9 @@ class MyRoomsView(APIView):
         employee = my_employee(request)
         granted = set(RoomAccessGrant.objects.filter(employee=employee).values_list("room_id", flat=True))
         rooms = Room.objects.filter(business_id=employee.business_id)
-        return Response(MyRoomSerializer(rooms, many=True, context={"granted": granted}).data)
+        return Response(MyRoomSerializer(rooms, many=True, context={
+            "granted": granted, "attendance_state": employee_attendance_state(employee),
+        }).data)
 
 
 @extend_schema(tags=MY_TAGS, summary="Your door access history",

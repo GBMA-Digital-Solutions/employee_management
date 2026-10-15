@@ -315,6 +315,7 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
         ? { access_method: "door_code", proximity_proof: proximityProof, ...(attendanceAction ? { attendance_action: attendanceAction } : {}) }
         : { access_method: "NDEFReader" in window ? "nfc" : "bluetooth", proximity_proof: "" });
       setNotice(result.detail);
+      await rooms.reload();
     } catch (err) {
       setError(err.message);
       if (err.status === 401) onAuthError?.(err);
@@ -345,15 +346,20 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
     </dl>
     <div className="room-detail-actions">
       {selected.can_unlock && selected.device_status === "simulator" && selected.is_check_in_door && <div className="attendance-scan-actions">
-        <strong>Choose before scanning</strong>
-        <button type="button" className="button button-coral" disabled={busy}
-          onClick={() => setScanningRoom({ room: selected, action: "scan_in" })}>Scan In / Check In — entering</button>
-        <button type="button" className="button button-outline" disabled={busy}
-          onClick={() => setScanningRoom({ room: selected, action: "scan_out" })}>Scan Out — leaving temporarily</button>
-        <button type="button" className="button button-outline" disabled={busy}
-          onClick={() => setScanningRoom({ room: selected, action: "scan_in" })}>Scan In — returning</button>
-        <button type="button" className="button button-outline" disabled={busy}
-          onClick={() => setScanningRoom({ room: selected, action: "check_out" })}>Check Out — final departure</button>
+        <strong>{selected.attendance_state === "inside" ? "You are currently in the office"
+          : selected.attendance_state === "outside" ? "You are currently outside the office"
+          : selected.attendance_state === "completed" ? "Your workday is complete"
+          : "Start your workday"}</strong>
+        {selected.attendance_state === "not_started" && <button type="button" className="button button-coral" disabled={busy}
+          onClick={() => setScanningRoom({ room: selected, action: "scan_in" })}>Check In — first arrival</button>}
+        {selected.attendance_state === "inside" && <>
+          <button type="button" className="button button-coral" disabled={busy}
+            onClick={() => setScanningRoom({ room: selected, action: "scan_out" })}>Scan Out — leaving temporarily</button>
+          <button type="button" className="button button-outline" disabled={busy}
+            onClick={() => setScanningRoom({ room: selected, action: "check_out" })}>Check Out — final departure</button>
+        </>}
+        {selected.attendance_state === "outside" && <button type="button" className="button button-coral" disabled={busy}
+          onClick={() => setScanningRoom({ room: selected, action: "scan_in" })}>Scan In — returning</button>}
       </div>}
       {(employer || selected.can_unlock) && selected.device_status === "simulator" && !(selected.can_unlock && selected.is_check_in_door) && <button
         type="button" className="button button-coral" disabled={busy} onClick={() => setScanningRoom({ room: selected, action: "" })}>
