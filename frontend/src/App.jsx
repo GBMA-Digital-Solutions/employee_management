@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import heroImage from "./assets/images/hero.jpeg";
 import { ACCESS_TOKEN, REFRESH_TOKEN } from "./constants";
-import { fetchAccount } from "./api";
+import { fetchAccount, logoutUser } from "./api";
 import AuthForm from "./AuthForm";
 import EmployeeWorkspace from "./components/EmployeeWorkspace";
 import EmployerWorkspace from "./components/EmployerWorkspace";
@@ -207,7 +207,11 @@ function App() {
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
 
-  const handleLogout = useCallback(() => {
+  const handleLogout = useCallback(async () => {
+    const activeToken = localStorage.getItem(ACCESS_TOKEN);
+    if (activeToken) {
+      try { await logoutUser(activeToken); } catch { /* Clear locally even when offline. */ }
+    }
     localStorage.removeItem(ACCESS_TOKEN);
     localStorage.removeItem(REFRESH_TOKEN);
     setToken(null);

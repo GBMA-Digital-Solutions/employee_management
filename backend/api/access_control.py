@@ -199,7 +199,7 @@ class UnlockRequestSerializer(serializers.Serializer):
         required=False, min_value=0, max_value=10000,
         help_text="How far the phone measured itself from the door. Required by doors with a range limit.")
     attendance_action = serializers.ChoiceField(
-        choices=["check_in", "check_out"], required=False,
+        choices=["check_in", "scan_out", "scan_in", "check_out"], required=False,
         help_text="Required for an employee using the official check-in door.")
 
 
@@ -212,26 +212,37 @@ UnlockResultSerializer = inline_serializer(name="UnlockResult", fields={
 
 
 def validate_attendance_action(employee, action):
-    active = AttendanceVisit.objects.filter(
-        attendance__employee=employee, check_out_at__isnull=True,
-    ).exists()
-    if action == "check_in" and active:
-        raise serializers.ValidationError("You are already checked in. Scan again and check out first.")
-    if action == "check_out" and not active:
-        raise serializers.ValidationError("You are already checked out. Scan again and check in first.")
+    today = timezone.localdate()
+    attendance = Attendance.objects.filter(employee=employee, date=today, shift="day").first()
+    active = bool(attendance and attendance.visits.filter(check_out_at__isnull=True).exists())
+    if action == "check_in" and attendance:
+        raise serializers.ValidationError("Check In is only for your first arrival of the workday.")
+    if action == "scan_in" and (not attendance or active or attendance.finalized_at):
+        raise serializers.ValidationError("Scan In is only available after a temporary Scan Out.")
+    if action in {"scan_out", "check_out"} and not active:
+        raise serializers.ValidationError("You must be inside the office before leaving.")
+    if attendance and attendance.finalized_at:
+        raise serializers.ValidationError("This workday has already been closed with Check Out.")
 
 
 def record_door_attendance(employee, action):
-    """Apply one alternating QR attendance event and update the daily aggregate."""
+    """Apply Check In, temporary scans, or the final Check Out."""
     now = timezone.now()
     date = timezone.localdate(now)
     with transaction.atomic():
         active = AttendanceVisit.objects.select_for_update().filter(
             attendance__employee=employee, check_out_at__isnull=True,
         ).select_related("attendance").first()
-        if action == "check_in":
+        if action in {"check_in", "scan_in"}:
             if active:
-                raise serializers.ValidationError("You are already checked in. Scan again and check out first.")
+                raise serializers.ValidationError("You are already inside the office.")
+            existing = Attendance.objects.select_for_update().filter(
+                employee=employee, date=date, shift="day",
+            ).first()
+            if action == "check_in" and existing:
+                raise serializers.ValidationError("Check In is only for your first arrival of the workday.")
+            if action == "scan_in" and (not existing or existing.finalized_at):
+                raise serializers.ValidationError("Scan In is only available after a temporary Scan Out.")
             attendance, _ = Attendance.objects.select_for_update().get_or_create(
                 employee=employee, date=date, shift="day",
             )
@@ -240,22 +251,24 @@ def record_door_attendance(employee, action):
             attendance.check_in_at = attendance.check_in_at or now
             attendance.check_out_at = None
             attendance.save(update_fields=["status", "check_in_at", "check_out_at"])
-            return "checked_in"
+            return action
         if not active:
-            raise serializers.ValidationError("You are already checked out. Scan again and check in first.")
+            raise serializers.ValidationError("You must be inside the office before leaving.")
         active.check_out_at = now
         active.save(update_fields=["check_out_at"])
         attendance = active.attendance
         completed = attendance.visits.exclude(check_out_at=None)
         seconds = sum((visit.check_out_at - visit.check_in_at).total_seconds() for visit in completed)
         attendance.check_out_at = now
+        if action == "check_out":
+            attendance.finalized_at = now
         attendance.status = "present"
         attendance.hours_worked = min(
             Decimal("24.00"),
             (Decimal(str(seconds)) / Decimal("3600")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
         )
-        attendance.save(update_fields=["check_out_at", "status", "hours_worked"])
-        return "checked_out"
+        attendance.save(update_fields=["check_out_at", "finalized_at", "status", "hours_worked"])
+        return action
 
 
 # --- Employer -------------------------------------------------------------------
@@ -541,10 +554,13 @@ class RoomUnlockView(APIView):
             room.is_check_in_door and employee is not None
         ) else None
         detail = "Door unlocked." if confirmed else "Unlock sent to the door."
-        if attendance == "checked_in":
-            detail += " You are now checked in."
-        elif attendance == "checked_out":
-            detail += " You are now checked out."
+        messages = {
+            "check_in": " Your workday is now checked in.",
+            "scan_out": " Your temporary Scan Out was recorded.",
+            "scan_in": " Your return Scan In was recorded.",
+            "check_out": " Your workday is now checked out.",
+        }
+        detail += messages.get(attendance, "")
         return Response({"detail": detail, "result": "granted", "unlock_status": unlock_status,
                          "attendance": attendance})
 

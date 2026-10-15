@@ -113,6 +113,10 @@ export function loginUser(username, password) {
   });
 }
 
+export function logoutUser(token) {
+  return request("/api/logout/", { method: "POST", token });
+}
+
 export function fetchEmployees(token) {
   return request("/api/employees/", { token });
 }
@@ -205,6 +209,38 @@ export function fetchEmailSettings(token) {
 
 export function saveEmailSettings(token, body) {
   return request("/api/account/email/", { method: "PATCH", token, body });
+}
+
+export function fetchWorkSchedule(token) {
+  return request("/api/account/work-schedule/", { token });
+}
+
+export function fetchActivityMonitoring(token, query = {}) {
+  return request(`/api/activity-monitoring/?${new URLSearchParams(query)}`, { token });
+}
+
+export function classifyActivityDomain(token, domain, category) {
+  return request("/api/activity-monitoring/classifications/", { method: "POST", token, body: { domain, category } });
+}
+
+export function issueMonitoringAgent(token, employee) {
+  return request(`/api/activity-monitoring/agents/${employee}/`, { method: "POST", token });
+}
+
+export function revokeMonitoringAgent(token, employee) {
+  return request(`/api/activity-monitoring/agents/${employee}/`, { method: "DELETE", token });
+}
+
+export function fetchMonitoringDisclosure(token) {
+  return request("/api/me/monitoring-disclosure/", { token });
+}
+
+export function acknowledgeMonitoringDisclosure(token) {
+  return request("/api/me/monitoring-disclosure/", { method: "POST", token, body: { acknowledged: true } });
+}
+
+export function saveWorkSchedule(token, body) {
+  return request("/api/account/work-schedule/", { method: "PATCH", token, body });
 }
 
 export function fetchContractPreview(token, id) {

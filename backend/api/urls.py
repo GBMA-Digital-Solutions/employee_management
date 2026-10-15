@@ -10,6 +10,8 @@ from .workplace import WorkplaceLocationView
 from .access_control import (RoomAccessGrantViewSet, RoomAccessHistoryViewSet, RoomPermissionChangeViewSet,
                              RoomUnlockView, RoomViewSet)
 from .door_simulator import DoorSimulatorView
+from .activity_monitoring import (ActivityIngestView, ActivityReportView, AgentIssueView,
+                                  ClassificationView, MonitoringDisclosureView)
 
 router = DefaultRouter()
 router.register("employees", EmployeeViewSet)
@@ -32,6 +34,11 @@ router.register("access-control/permission-changes", RoomPermissionChangeViewSet
 router.register("access-control/history", RoomAccessHistoryViewSet, basename="room-access-history")
 
 urlpatterns = [path("reports/", ManagerReportsView.as_view(), name="manager-reports"),
+               path("activity-monitoring/", ActivityReportView.as_view(), name="activity-monitoring"),
+               path("activity-monitoring/classifications/", ClassificationView.as_view(), name="activity-classifications"),
+               path("activity-monitoring/agents/<int:employee_id>/", AgentIssueView.as_view(), name="activity-agent"),
+               path("activity-monitoring/ingest/", ActivityIngestView.as_view(), name="activity-ingest"),
+               path("me/monitoring-disclosure/", MonitoringDisclosureView.as_view(), name="monitoring-disclosure"),
                path("access-control/rooms/<int:pk>/unlock/", RoomUnlockView.as_view(), name="room-unlock"),
                path("access-control/simulator/<int:pk>/", DoorSimulatorView.as_view(), name="door-simulator"),
                path("workplace-location/", WorkplaceLocationView.as_view(), name="workplace-location"),

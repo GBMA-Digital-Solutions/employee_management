@@ -8,8 +8,9 @@ from api.accounts import (AccountView, EmailSettingsView, MyContractSignView, My
                           MyAnnouncementReadAllView, MyCalendarEventReadView, MyCalendarReadAllView,
                           MyCalendarView, MyLeaveDetailView, MyLeaveView, MyPhotoView, MyProfileView,
                           PasswordChangeView, PasswordResetConfirmView,
-                          PasswordResetRequestView, SignupView, TokenView)
+                          PasswordResetRequestView, SignupView, TokenView, LogoutView)
 from api.access_control import MyAccessHistoryView, MyRoomsView
+from api.work_schedule import WorkScheduleView
 from api.admin_activity import AdminActivityView, AdminCompanyActivityView, AdminEmployeeActivityView
 from api.admin_records import AdminRecordsView
 from api.dashboard import AdminHealthView, AdminOverviewView
@@ -47,6 +48,7 @@ urlpatterns = [
     path("api/account/", AccountView.as_view(), name="account"),
     path("api/account/email/", EmailSettingsView.as_view(), name="account-email"),
     path("api/account/password/", PasswordChangeView.as_view(), name="password-change"),
+    path("api/account/work-schedule/", WorkScheduleView.as_view(), name="work-schedule"),
     path("api/me/profile/", MyProfileView.as_view(), name="my-profile"),
     path("api/me/announcements/", MyAnnouncementsView.as_view(), name="my-announcements"),
     path("api/me/announcements/read-all/", MyAnnouncementReadAllView.as_view(), name="my-announcements-read-all"),
@@ -70,6 +72,7 @@ urlpatterns = [
     path("api/me/contracts/<int:pk>/termination/acknowledge/", MyContractTerminationAcknowledgeView.as_view(), name="my-contract-termination-acknowledge"),
     path("admin/", admin.site.urls),
     path("api/token/", TokenView.as_view(), name="get_token"),
+    path("api/logout/", LogoutView.as_view(), name="logout"),
     path("api/token/refresh/", TokenRefreshView.as_view(), name="refresh"),
     path("api-auth/", include("rest_framework.urls")),
     # Interactive API documentation. The schema is generated from the views and

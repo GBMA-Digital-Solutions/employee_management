@@ -8,7 +8,7 @@ import ModalDialog from "./components/ModalDialog";
 import ChangePasswordDialog from "./components/ChangePasswordDialog";
 import DashboardTopNav from "./components/DashboardTopNav";
 import { useConfirm } from "./components/ConfirmDialog";
-import { acknowledgeMyContractTermination, cancelMyLeave, fetchAccount, fetchMyAnnouncements, fetchMyAttendance, fetchMyCalendar, fetchMyContracts, fetchMyLeave, fetchMyPhoto, fetchMyProfile, markAllMyAnnouncementsRead, markAllMyCalendarRead, markMyAnnouncementRead, markMyCalendarEventRead, requestMyContractTermination, saveMyProfile, signMyContract, submitMyLeave, updateMyLeave } from "./api";
+import { acknowledgeMonitoringDisclosure, acknowledgeMyContractTermination, cancelMyLeave, fetchAccount, fetchMonitoringDisclosure, fetchMyAnnouncements, fetchMyAttendance, fetchMyCalendar, fetchMyContracts, fetchMyLeave, fetchMyPhoto, fetchMyProfile, markAllMyAnnouncementsRead, markAllMyCalendarRead, markMyAnnouncementRead, markMyCalendarEventRead, requestMyContractTermination, saveMyProfile, signMyContract, submitMyLeave, updateMyLeave } from "./api";
 import { decisionText, label, longDate, money, today } from "./managerConfig";
 
 // The employer supplies only name, job title and email. Everything here is the
@@ -165,6 +165,14 @@ function visitTime(visits, now) {
   return `${hours}:${minutes}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
+function durationOf(seconds) {
+  const safe = Math.max(0, Number(seconds) || 0);
+  const totalMinutes = Math.ceil(safe / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${hours}h ${minutes}m`;
+}
+
 function TimeClockCard({ token }) {
   const [day, setDay] = useState(null);
   const [shift, setShift] = useState("day");
@@ -195,23 +203,45 @@ function TimeClockCard({ token }) {
   const activeVisit = visits.find((visit) => !visit.check_out_at);
   return <section className="panel account-panel time-clock-card" id="attendance">
     <div className="time-clock-heading"><div><p className="eyebrow dark-eyebrow">TODAY</p><h3>{label(shift)} shift</h3></div>
-      <span className={`status-badge ${activeVisit ? "status-sent" : attendance ? "status-signed" : "status-draft"}`}>{activeVisit ? "In office" : attendance ? "Outside office" : "Not checked in"}</span>
+      <span className={`status-badge ${activeVisit ? "status-sent" : attendance ? "status-signed" : "status-draft"}`}>{activeVisit ? "In office" : attendance?.finalized_at ? "Checked out" : attendance ? "Temporarily outside" : "Not checked in"}</span>
     </div>
     <p>{day?.date ? longDate(day.date) : "Loading today’s attendance…"}</p>
     <div className="shift-tabs" aria-label="Choose attendance shift">
       {["day", "night"].map((item) => <button key={item} className={shift === item ? "active" : ""} type="button" onClick={() => { setShift(item); setError(""); }}>{label(item)} shift</button>)}
     </div>
     {error && <p className="message error" role="alert">{error}</p>}
-    <p className="message">To check in or out, open the official check-in room, choose the action, and scan its QR code.</p>
+    {day?.almost_leaving && !attendance?.finalized_at && <p className="message success" role="status">You are almost ready to leave. Remember to Check Out for your final departure.</p>}
+    <p className="message">Use Check In for your first arrival, Scan Out and Scan In for temporary trips, and Check Out only for your final departure.</p>
     {attendance && <dl className="clock-times">
       <dt>First check-in</dt><dd>{timeOf(attendance.check_in_at)}</dd>
       <dt>Latest check-out</dt><dd>{timeOf(attendance.check_out_at)}</dd>
       <dt>Completed time in office</dt><dd>{attendance.hours_worked} hours</dd>
       <dt>Time out of office</dt><dd>{attendance.time_out_hours} hours</dd>
+      <dt>Expected work today</dt><dd>{day.expected_daily_hours || "8.00"} hours</dd>
+      <dt>Working time remaining</dt><dd>{durationOf(day.remaining_seconds)}</dd>
     </dl>}
     {activeVisit && <div className="live-shift-timer" aria-live="off"><span>Time in office</span><strong>{visitTime(visits, now)}</strong><small>Counting live</small></div>}
     {visits.length > 0 && <div className="attendance-visits"><strong>Office visits</strong>{visits.map((visit, index) => <div key={visit.id}><span>Visit {index + 1}</span><span>{timeOf(visit.check_in_at)} to {visit.check_out_at ? timeOf(visit.check_out_at) : "Now"}</span></div>)}</div>}
     {day && <div className="shift-day-summary"><strong>Total completed time today: {day.total_hours || "0.00"} hours</strong></div>}
+  </section>;
+}
+
+function MonitoringDisclosureCard({ token }) {
+  const [disclosure, setDisclosure] = useState(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { fetchMonitoringDisclosure(token).then(setDisclosure).catch((err) => setError(err.message)); }, [token]);
+  async function acknowledge() {
+    setBusy(true); setError("");
+    try { setDisclosure(await acknowledgeMonitoringDisclosure(token)); }
+    catch (err) { setError(err.message); }
+    finally { setBusy(false); }
+  }
+  return <section className="panel account-panel"><h3>Work-device activity monitoring</h3>
+    <p>{disclosure?.notice || "Loading monitoring disclosure…"}</p>
+    {error && <p className="message error" role="alert">{error}</p>}
+    {disclosure?.acknowledged_at ? <p className="message success">Disclosure acknowledged on {new Date(disclosure.acknowledged_at).toLocaleString()}.</p>
+      : disclosure && <button className="button button-coral" type="button" disabled={busy} onClick={acknowledge}>{busy ? "Saving…" : "I have read this disclosure"}</button>}
   </section>;
 }
 
@@ -647,7 +677,7 @@ export default function AccountPage({ account, token, onAccountChange, onLogout 
          job details will appear here and you will be able to complete your own profile.</p>
     </section>}
 
-    {profile && <EmploymentCard token={token} profile={profile} />}</>}
+    {profile && <><EmploymentCard token={token} profile={profile} /><MonitoringDisclosureCard token={token} /></>}</>}
 
     {loadError && <p className="message error" role="alert">{loadError}</p>}
 

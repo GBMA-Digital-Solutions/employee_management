@@ -254,7 +254,7 @@ class AccessControlTests(APITestCase):
         ])
 
     @override_settings(DOOR_GATEWAY=FAKE_GATEWAY)
-    def test_check_in_door_requires_alternating_attendance_actions(self):
+    def test_check_in_door_separates_workday_checks_from_temporary_scans(self):
         self.room.is_check_in_door = True
         self.room.save(update_fields=["is_check_in_door"])
         RoomAccessGrant.objects.create(room=self.room, employee=self.aline)
@@ -263,16 +263,21 @@ class AccessControlTests(APITestCase):
         missing = self.unlock(self.room, proof="tag-door-101")
         self.assertEqual(missing.status_code, 400)
         first = self.unlock(self.room, proof="tag-door-101", attendance_action="check_in")
-        self.assertEqual((first.status_code, first.data["attendance"]), (200, "checked_in"))
+        self.assertEqual((first.status_code, first.data["attendance"]), (200, "check_in"))
         attendance = Attendance.objects.get(employee=self.aline, date=timezone.localdate(), shift="day")
         self.assertIsNotNone(attendance.check_in_at)
 
         duplicate = self.unlock(self.room, proof="tag-door-101", attendance_action="check_in")
         self.assertEqual(duplicate.status_code, 400)
-        second = self.unlock(self.room, proof="tag-door-101", attendance_action="check_out")
-        self.assertEqual(second.data["attendance"], "checked_out")
-        third = self.unlock(self.room, proof="tag-door-101", attendance_action="check_in")
-        self.assertEqual(third.data["attendance"], "checked_in")
+        second = self.unlock(self.room, proof="tag-door-101", attendance_action="scan_out")
+        self.assertEqual(second.data["attendance"], "scan_out")
+        third = self.unlock(self.room, proof="tag-door-101", attendance_action="scan_in")
+        self.assertEqual(third.data["attendance"], "scan_in")
+        final = self.unlock(self.room, proof="tag-door-101", attendance_action="check_out")
+        self.assertEqual(final.data["attendance"], "check_out")
+        self.assertIsNotNone(Attendance.objects.get(pk=attendance.pk).finalized_at)
+        closed = self.unlock(self.room, proof="tag-door-101", attendance_action="scan_in")
+        self.assertEqual(closed.status_code, 400)
         self.assertEqual(Attendance.objects.filter(employee=self.aline).count(), 1)
         self.assertEqual(AttendanceVisit.objects.filter(attendance=attendance).count(), 2)
 

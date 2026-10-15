@@ -749,7 +749,9 @@ class EmployeeOnboardingTests(APITestCase):
         self.assertEqual(annual["remaining_days"], Decimal("20.0"))
 
         start = timezone.localdate() + timedelta(days=1)
-        while start.weekday() >= 5:
+        # Choose two consecutive weekdays; a Friday start would make the
+        # second calendar day Saturday and this assertion date-dependent.
+        while start.weekday() >= 4:
             start += timedelta(days=1)
         end = start + timedelta(days=1)
         requested = self.client.post("/api/me/leave/", {

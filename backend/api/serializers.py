@@ -300,7 +300,7 @@ class AttendanceSerializer(ManagerRecordSerializer):
     class Meta:
         model = Attendance
         fields = "__all__"
-        read_only_fields = ["check_in_at", "check_out_at"] + [
+        read_only_fields = ["check_in_at", "check_out_at", "finalized_at", "departure_reminder_sent_at"] + [
             f"{prefix}_{name}" for prefix in ("check_in", "check_out")
             for name in ("location_status", "latitude", "longitude", "distance_m", "accuracy_m")]
 

@@ -50,6 +50,13 @@ class Business(models.Model):
     email_use_tls = models.BooleanField(default=True)
     email_host_user = models.EmailField(blank=True)
     email_host_password = models.CharField(max_length=200, blank=True)
+    expected_daily_hours = models.DecimalField(
+        max_digits=4, decimal_places=2, default=Decimal("8.00"),
+        validators=[MinValueValidator(Decimal("0.25")), MaxValueValidator(Decimal("24.00"))],
+    )
+    workday_start = models.TimeField(null=True, blank=True)
+    workday_end = models.TimeField(null=True, blank=True)
+    reminder_minutes = models.PositiveIntegerField(default=15, validators=[MaxValueValidator(240)])
 
     def __str__(self):
         return self.name
@@ -83,6 +90,7 @@ class AccountProfile(models.Model):
     # no record until an employer hires them.
     employee = models.OneToOneField("Employee", on_delete=models.SET_NULL, null=True, blank=True, related_name="account")
     must_change_password = models.BooleanField(default=False)
+    token_version = models.PositiveIntegerField(default=0)
 
     class Meta:
         constraints = [models.CheckConstraint(
@@ -202,6 +210,10 @@ class Attendance(models.Model):
         validators=[MinValueValidator(0), MaxValueValidator(24)])
     check_in_at = models.DateTimeField(null=True, blank=True)
     check_out_at = models.DateTimeField(null=True, blank=True)
+    # Set only by the day's final Check Out. Temporary Scan Out events merely
+    # close the current AttendanceVisit and leave the workday open.
+    finalized_at = models.DateTimeField(null=True, blank=True)
+    departure_reminder_sent_at = models.DateTimeField(null=True, blank=True)
     notes = models.TextField(blank=True)
     # Where the employee clocked in and out, checked against the workplace on
     # the server. A blank status means no check was made (no workplace saved,
@@ -725,3 +737,52 @@ class SimulatedDoor(models.Model):
     started_at = models.DateTimeField()
     last_seen_at = models.DateTimeField()
     unlocked_until = models.DateTimeField(null=True, blank=True)
+
+
+# --- Disclosed employee activity monitoring ----------------------------------
+
+class MonitoringConsent(models.Model):
+    employee = models.OneToOneField(Employee, on_delete=models.CASCADE, related_name="monitoring_consent")
+    notice_version = models.CharField(max_length=20, default="1")
+    acknowledged_at = models.DateTimeField(null=True, blank=True)
+
+
+class MonitoringAgent(models.Model):
+    employee = models.OneToOneField(Employee, on_delete=models.CASCADE, related_name="monitoring_agent")
+    token_hash = models.CharField(max_length=64, unique=True)
+    is_active = models.BooleanField(default=True)
+    issued_at = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+
+
+class ActivityClassification(models.Model):
+    CATEGORIES = [("work", "Work-related"), ("social", "Social media"),
+                  ("entertainment", "Entertainment"), ("other", "Other")]
+    business = models.ForeignKey(Business, on_delete=models.CASCADE, related_name="activity_classifications")
+    domain = models.CharField(max_length=253)
+    category = models.CharField(max_length=20, choices=CATEGORIES, default="other")
+
+    class Meta:
+        ordering = ["domain"]
+        constraints = [models.UniqueConstraint(fields=["business", "domain"],
+                                                name="unique_business_activity_domain")]
+
+
+class ActivityEvent(models.Model):
+    SOURCES = [("windows", "Windows desktop agent"), ("browser", "Browser extension")]
+    KINDS = [("application", "Desktop application"), ("website", "Website")]
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name="activity_events")
+    source = models.CharField(max_length=10, choices=SOURCES)
+    kind = models.CharField(max_length=12, choices=KINDS)
+    # Browser URLs are stored without query strings or fragments. Application
+    # events store only the application name, never window contents.
+    resource = models.CharField(max_length=500)
+    domain = models.CharField(max_length=253, blank=True, db_index=True)
+    started_at = models.DateTimeField(db_index=True)
+    ended_at = models.DateTimeField()
+    duration_seconds = models.PositiveIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-started_at", "-id"]
+        indexes = [models.Index(fields=["employee", "started_at"])]

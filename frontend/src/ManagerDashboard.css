@@ -362,6 +362,25 @@ body:has(.form-modal[open]) { overflow: hidden; }
   .employee-contract-summary { flex-direction: column; }
   .leave-balance-grid, .leave-date-fields { grid-template-columns: 1fr; }
 }
+
+.activity-filters { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 20px; padding: 18px 20px; }
+.activity-filters > div { display: grid; gap: 6px; min-width: 190px; }
+.activity-filters label { color: var(--burgundy); font-size: 13px; font-weight: 800; }
+.activity-agent { display: grid; grid-template-columns: 1fr auto; gap: 12px 20px; align-items: center; margin-bottom: 20px; padding: 20px; }
+.activity-agent h3, .activity-agent p { margin: 0; }
+.activity-agent .message, .activity-agent .agent-token { grid-column: 1 / -1; }
+.agent-token { display: grid; gap: 6px; padding: 12px; border-radius: 8px; background: #fff8e7; }
+.agent-token code { overflow-wrap: anywhere; color: var(--burgundy); }
+.activity-summary { margin-bottom: 20px; }
+.records-panel td small { display: block; margin-top: 3px; color: var(--olive); }
+.activity-timeline { display: grid; gap: 0; }
+.activity-timeline > div { display: grid; grid-template-columns: minmax(190px, .7fr) minmax(220px, 1.3fr) minmax(220px, 1fr); gap: 18px; padding: 14px 4px; border-bottom: 1px solid #ece6dc; }
+.activity-timeline time, .activity-timeline span { color: var(--olive); font-size: 13px; }
+.activity-timeline strong { color: var(--burgundy); overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .activity-agent { grid-template-columns: 1fr; }
+  .activity-timeline > div { grid-template-columns: 1fr; gap: 4px; }
+}
 @media print {
   body:has(.payslip-dialog[open]) .dashboard-workspace > :not(.payslip-dialog) { display: none; }
   body:has(.payslip-dialog[open]) .payslip-dialog { position: absolute; inset: 0; width: 100%; max-width: none; max-height: none; height: auto; overflow: visible; margin: 0; padding: 16px; border: 0; box-shadow: none; }

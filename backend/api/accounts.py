@@ -41,6 +41,7 @@ from .schema import (RESPONSE_400, RESPONSE_401, RESPONSE_403_WORKSPACE, Account
                      MyLeaveOverviewSerializer, TokenPairSerializer, with_errors)
 from .serializers import ContractTerminationSerializer, LeaveBalanceSerializer
 from .workplace import PositionSerializer, blank_location, location_fields
+from .work_schedule import work_summary
 
 # Documentation-only helpers. None of this takes part in handling a request.
 RECORD_ID = OpenApiParameter(
@@ -114,6 +115,14 @@ def account_data(user):
         "workspace_approved": employee_has_approved_contract(employee),
         "email_configured": onboarding.can_deliver(business) if manager else False,
     }
+
+
+def issue_tokens(user):
+    """Issue a pair carrying the user's revocable server-side session version."""
+    refresh = RefreshToken.for_user(user)
+    profile = getattr(user, "account_profile", None)
+    refresh["token_version"] = profile.token_version if profile else 0
+    return {"access": str(refresh.access_token), "refresh": str(refresh)}
 
 
 class SignupSerializer(serializers.ModelSerializer):
@@ -216,8 +225,8 @@ class SignupView(APIView):
         except IntegrityError:
             # The unique username may have been claimed after validation.
             raise serializers.ValidationError({"username": "An account with this username already exists."})
-        refresh = RefreshToken.for_user(user)
-        return Response({"access": str(refresh.access_token), "refresh": str(refresh), "user": account_data(user)},
+        tokens = issue_tokens(user)
+        return Response({**tokens, "user": account_data(user)},
                         status=status.HTTP_201_CREATED)
 
 
@@ -451,6 +460,13 @@ class EmailSettingsView(APIView):
 class EmailOrUsernameTokenSerializer(TokenObtainPairSerializer):
     """Employees never chose a username, so let them sign in with their email."""
 
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+        profile = getattr(user, "account_profile", None)
+        token["token_version"] = profile.token_version if profile else 0
+        return token
+
     def validate(self, attrs):
         login = attrs.get(self.username_field) or ""
         if "@" in login:
@@ -503,6 +519,17 @@ class EmailOrUsernameTokenSerializer(TokenObtainPairSerializer):
 )
 class TokenView(TokenObtainPairView):
     serializer_class = EmailOrUsernameTokenSerializer
+
+
+class LogoutView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        profile = getattr(request.user, "account_profile", None)
+        if profile:
+            profile.token_version += 1
+            profile.save(update_fields=["token_version"])
+        return Response({"detail": "Signed out."})
 
 
 class PasswordChangeSerializer(serializers.Serializer):
@@ -562,9 +589,13 @@ class PasswordChangeView(APIView):
                 profile.save(update_fields=["must_change_password"])
         # Reissue so the client is not left holding a token minted against the
         # temporary password.
-        refresh = RefreshToken.for_user(user)
-        return Response({"access": str(refresh.access_token), "refresh": str(refresh),
-                         "user": account_data(user)})
+        # Revoke every token minted before the password change, then issue the
+        # replacement pair at the new version.
+        profile = getattr(user, "account_profile", None)
+        if profile:
+            profile.token_version += 1
+            profile.save(update_fields=["token_version"])
+        return Response({**issue_tokens(user), "user": account_data(user)})
 
 
 class MyProfileSerializer(serializers.ModelSerializer):
@@ -856,6 +887,9 @@ class MyAttendanceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Attendance
         fields = ["id", "date", "shift", "status", "hours_worked", "check_in_at", "check_out_at",
+                  "finalized_at",
+                  "check_in_location_status", "check_in_distance_m", "check_in_accuracy_m",
+                  "check_out_location_status", "check_out_distance_m", "check_out_accuracy_m",
                   "visits", "time_out_hours"]
 
     def get_time_out_hours(self, obj):
@@ -920,11 +954,27 @@ class MyAttendanceView(APIView):
         shifts = list(Attendance.objects.filter(employee=employee, date=date).order_by("id"))
         attendance = next((item for item in shifts if item.shift == selected_shift), None)
         total = sum((item.hours_worked for item in shifts), Decimal("0.00"))
+        workplace = WorkplaceLocation.objects.filter(business_id=employee.business_id).first()
+        selected = attendance or next((item for item in shifts if item.visits.exists()), None)
+        live = work_summary(selected) if selected else {
+            "worked_seconds": 0,
+            "remaining_seconds": int(float(employee.business.expected_daily_hours) * 3600),
+            "expected_seconds": int(float(employee.business.expected_daily_hours) * 3600),
+        }
         return {
             "date": date,
             "attendance": MyAttendanceSerializer(attendance).data if attendance else None,
             "shifts": MyAttendanceSerializer(shifts, many=True).data,
             "total_hours": f"{total:.2f}",
+            "workplace_configured": workplace is not None,
+            "workplace_radius_m": workplace.radius_m if workplace else None,
+            "expected_daily_hours": str(employee.business.expected_daily_hours),
+            "worked_seconds": live["worked_seconds"],
+            "remaining_seconds": live["remaining_seconds"],
+            "almost_leaving": bool(
+                selected and not selected.finalized_at
+                and live["remaining_seconds"] <= employee.business.reminder_minutes * 60
+            ),
         }
 
     def get(self, request):

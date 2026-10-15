@@ -7,9 +7,10 @@ import ModalDialog from "./components/ModalDialog";
 import Payslip from "./components/Payslip";
 import { useConfirm } from "./components/ConfirmDialog";
 import { Link, Navigate, Route, Routes } from "react-router";
-import { approveContractWorker, calculatePayroll, decideContractTermination, deleteRecord, downloadContract, fetchCompanyThread, fetchEmailSettings, fetchEmployeePhoto, fetchRecords, fetchReports, fetchSalaryPaymentHistory, fetchSalaryPaymentPreview, initiateContractTermination, markCompanyThreadRead, markSalaryPaid, requestNewContractSignature, resendContractSignatureEmail, saveEmailSettings, saveRecord, sendCompanyMessage, sendContractForSignature } from "./api";
+import { approveContractWorker, calculatePayroll, decideContractTermination, deleteRecord, downloadContract, fetchCompanyThread, fetchEmailSettings, fetchEmployeePhoto, fetchRecords, fetchReports, fetchSalaryPaymentHistory, fetchSalaryPaymentPreview, fetchWorkSchedule, initiateContractTermination, markCompanyThreadRead, markSalaryPaid, requestNewContractSignature, resendContractSignatureEmail, saveEmailSettings, saveRecord, saveWorkSchedule, sendCompanyMessage, sendContractForSignature } from "./api";
 import { AssetMisusePage, SalaryAdvancesPage } from "./PayrollExtras";
 import AccessControl from "./AccessControl";
+import ActivityMonitoring from "./ActivityMonitoring";
 import Conversation from "./components/Conversation";
 import DashboardTopNav from "./components/DashboardTopNav";
 import { PasswordCard } from "./AccountPage";
@@ -909,6 +910,8 @@ function SettingsPage({ token, account, onAccountChange, onAuthError }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [editOpen, setEditOpen] = useState(false);
+  const [schedule, setSchedule] = useState({ expected_daily_hours: "8.00", workday_start: "", workday_end: "", reminder_minutes: 15 });
+  const [scheduleBusy, setScheduleBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -922,6 +925,14 @@ function SettingsPage({ token, account, onAccountChange, onAuthError }) {
     });
     return () => { cancelled = true; };
   }, [token, account?.email, onAuthError]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchWorkSchedule(token).then((result) => {
+      if (!cancelled) setSchedule({ ...result, workday_start: result.workday_start || "", workday_end: result.workday_end || "" });
+    }).catch((err) => { if (!cancelled) { setError(err.message); onAuthError(err); } });
+    return () => { cancelled = true; };
+  }, [token, onAuthError]);
 
   function update(event) {
     const { name, value } = event.target;
@@ -955,6 +966,18 @@ function SettingsPage({ token, account, onAccountChange, onAuthError }) {
     onAccountChange?.(user);
   }
 
+  async function submitSchedule(event) {
+    event.preventDefault();
+    setScheduleBusy(true); setError(""); setNotice("");
+    try {
+      const saved = await saveWorkSchedule(token, { ...schedule,
+        workday_start: schedule.workday_start || null, workday_end: schedule.workday_end || null });
+      setSchedule({ ...saved, workday_start: saved.workday_start || "", workday_end: saved.workday_end || "" });
+      setNotice("Working hours saved.");
+    } catch (err) { setError(err.message); onAuthError(err); }
+    finally { setScheduleBusy(false); }
+  }
+
   return <>
     <div className="section-heading">
       <div>
@@ -977,6 +1000,19 @@ function SettingsPage({ token, account, onAccountChange, onAuthError }) {
         </dl>
       </section>
       <PasswordCard token={token} forced={false} onChanged={passwordChanged} />
+      <section className="panel settings-card">
+        <h3>Company working hours</h3>
+        <p className="muted">The default workday is 8 hours. Set both times only when the company uses a fixed schedule.</p>
+        <form className="record-form" onSubmit={submitSchedule}>
+          <fieldset disabled={scheduleBusy}><div className="record-fields">
+            <div><label htmlFor="expected-hours">Expected hours per day</label><input id="expected-hours" type="number" min="0.25" max="24" step="0.25" value={schedule.expected_daily_hours} onChange={(event) => setSchedule((current) => ({ ...current, expected_daily_hours: event.target.value }))} required /></div>
+            <div><label htmlFor="reminder-minutes">Reminder before departure</label><input id="reminder-minutes" type="number" min="0" max="240" value={schedule.reminder_minutes} onChange={(event) => setSchedule((current) => ({ ...current, reminder_minutes: event.target.value }))} required /></div>
+            <div><label htmlFor="workday-start">Fixed start time (optional)</label><input id="workday-start" type="time" value={schedule.workday_start} onChange={(event) => setSchedule((current) => ({ ...current, workday_start: event.target.value }))} /></div>
+            <div><label htmlFor="workday-end">Fixed end time (optional)</label><input id="workday-end" type="time" value={schedule.workday_end} onChange={(event) => setSchedule((current) => ({ ...current, workday_end: event.target.value }))} /></div>
+          </div></fieldset>
+          <button className="button button-coral" type="submit" disabled={scheduleBusy}>{scheduleBusy ? "Saving…" : "Save working hours"}</button>
+        </form>
+      </section>
       <section className="panel record-form form-launch-card"><div><h3>Invitation email</h3><p className="muted">{configured ? `Emails are sent from ${form.email_host_user || "the platform email address"}.` : "Invitation email has not been configured."}</p></div>{canManage && <button className="button button-coral" type="button" onClick={() => { setError(""); setEditOpen(true); }}>{configured ? "Update email settings" : "Configure email"}</button>}</section>
     </div>
     {editOpen && <ModalDialog title="Invitation email settings" onClose={() => setEditOpen(false)}><form className="record-form" onSubmit={submit}>
@@ -1065,6 +1101,7 @@ const managerNav = [
   { label: "Communication", items: [{ key: "announcements" }, { key: "messages", label: "Messages" }, { key: "google-meet", label: "Google Meet" }] },
   { key: "reports", label: "Reports" },
   { key: "access-control", label: "Access Control" },
+  { key: "activity-monitoring", label: "Activity Monitoring" },
   { key: "settings", label: "Settings" },
 ];
 
@@ -1177,6 +1214,7 @@ export default function ManagerDashboard({ token, account, onLogout, onAuthError
         <Route path="settings" element={<SettingsPage token={token} account={account} onAccountChange={onAccountChange} onAuthError={onAuthError} />} />
         <Route path="asset-misuse" element={<AssetMisusePage token={token} employees={data.employees || []} onAuthError={onAuthError} />} />
         <Route path="access-control/*" element={<AccessControl token={token} role="employer" employees={data.employees || []} onAuthError={onAuthError} />} />
+        <Route path="activity-monitoring" element={<ActivityMonitoring token={token} onAuthError={onAuthError} />} />
         <Route path="salary-advances" element={<SalaryAdvancesPage token={token} employees={data.employees || []} onAuthError={onAuthError} onRequestsChange={setPendingAdvanceRequests} />} />
         {Object.keys(modules).map((resource) => <Route key={resource} path={resource} element={modules[resource].custom
           ? <ManagerCalendarPage token={token} events={data[resource] || []} onChange={updateRecords} onAuthError={onAuthError} />
