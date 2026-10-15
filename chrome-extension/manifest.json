@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Employee Website Activity Collector",
+  "version": "1.0.0",
+  "description": "Records website time during authorized work attendance after employee disclosure.",
+  "permissions": ["alarms", "idle", "storage", "tabs"],
+  "host_permissions": [
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "https://*.loca.lt/*"
+  ],
+  "background": { "service_worker": "service-worker.js" },
+  "action": {
+    "default_title": "Activity collector settings",
+    "default_popup": "popup.html"
+  }
+}

@@ -1035,6 +1035,7 @@ class MyAttendanceView(APIView):
                                      **blank_location("check_out")}.items():
                     setattr(attendance, field, value)
                 attendance.save()
+                AttendanceVisit.objects.create(attendance=attendance, check_in_at=recorded_at)
             else:
                 if not attendance or not attendance.check_in_at:
                     raise serializers.ValidationError(f"Check in to the {shift} shift before checking out.")
@@ -1056,7 +1057,13 @@ class MyAttendanceView(APIView):
                 checked = location_fields(employee.business_id, "check_out", position)
                 for field, value in checked.items():
                     setattr(attendance, field, value)
-                attendance.save(update_fields=["check_out_at", "status", "hours_worked", *checked])
+                attendance.finalized_at = recorded_at
+                visit = attendance.visits.select_for_update().filter(check_out_at__isnull=True).first()
+                if visit is None:
+                    visit = AttendanceVisit.objects.create(attendance=attendance, check_in_at=attendance.check_in_at)
+                visit.check_out_at = recorded_at
+                visit.save(update_fields=["check_out_at"])
+                attendance.save(update_fields=["check_out_at", "finalized_at", "status", "hours_worked", *checked])
         return Response(self.response_data(employee, attendance.date, shift))
 
 

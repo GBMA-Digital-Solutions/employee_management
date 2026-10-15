@@ -88,7 +88,8 @@ class AgentIssueView(APIView):
         raw = secrets.token_urlsafe(32)
         agent, _ = MonitoringAgent.objects.update_or_create(
             employee=employee,
-            defaults={"token_hash": hashlib.sha256(raw.encode()).hexdigest(), "is_active": True},
+            defaults={"token_hash": hashlib.sha256(raw.encode()).hexdigest(), "is_active": True,
+                      "issued_at": timezone.now()},
         )
         return Response({"employee": employee.pk, "token": raw, "issued_at": agent.issued_at,
                          "detail": "Copy this token now. It is shown only once."})
@@ -206,7 +207,8 @@ class ActivityReportView(APIView):
 
     def get(self, request):
         business_id = employer_business(request)
-        employees = Employee.objects.filter(business_id=business_id, is_active=True).order_by("first_name", "last_name")
+        employees = Employee.objects.filter(business_id=business_id, is_active=True).select_related(
+            "monitoring_consent", "monitoring_agent").order_by("first_name", "last_name")
         employee_id = request.query_params.get("employee")
         period = request.query_params.get("period", "daily")
         if period not in {"daily", "weekly", "monthly"}:
@@ -254,7 +256,12 @@ class ActivityReportView(APIView):
         return Response({
             "employees": [{"id": row.pk, "name": str(row), "department": row.department,
                            "consent": bool(getattr(row, "monitoring_consent", None)
-                                           and row.monitoring_consent.acknowledged_at)} for row in employees],
+                                           and row.monitoring_consent.acknowledged_at),
+                           "agent_active": bool(getattr(row, "monitoring_agent", None)
+                                                and row.monitoring_agent.is_active),
+                           "agent_last_seen_at": (row.monitoring_agent.last_seen_at
+                                                  if getattr(row, "monitoring_agent", None) else None)}
+                          for row in employees],
             "selected_employee": selected.pk if selected else None, "period": period,
             "start_date": start_date, "end_date": end_date,
             "total_seconds": sum(category_totals.values()),

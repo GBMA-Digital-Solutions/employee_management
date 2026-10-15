@@ -41,6 +41,12 @@ class ActivityMonitoringTests(APITestCase):
         event = ActivityEvent.objects.get()
         self.assertEqual(event.resource, "https://docs.example.com/project")
         self.assertEqual(event.domain, "docs.example.com")
+        self.client.force_authenticate(self.employer)
+        report = self.client.get(f"/api/activity-monitoring/?employee={self.employee.pk}&period=daily")
+        self.assertEqual(report.status_code, 200)
+        self.assertEqual(report.data["total_seconds"], 300)
+        self.assertTrue(report.data["employees"][0]["agent_active"])
+        self.assertIsNotNone(report.data["employees"][0]["agent_last_seen_at"])
 
     def test_sensitive_payloads_and_activity_outside_attendance_are_rejected(self):
         token = self.token()

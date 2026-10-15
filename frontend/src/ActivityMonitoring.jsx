@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { classifyActivityDomain, fetchActivityMonitoring } from "./api";
+import { classifyActivityDomain, fetchActivityMonitoring, issueMonitoringAgent, revokeMonitoringAgent } from "./api";
 import { today } from "./managerConfig";
 
 const categories = ["work", "social", "entertainment", "other"];
@@ -15,6 +15,7 @@ export default function ActivityMonitoring({ token, onAuthError }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [agentToken, setAgentToken] = useState("");
 
   const load = () => fetchActivityMonitoring(token, filters).then((result) => {
     setReport(result); setError("");
@@ -32,6 +33,31 @@ export default function ActivityMonitoring({ token, onAuthError }) {
     finally { setBusy(false); }
   }
 
+  async function issueAgent() {
+    if (!filters.employee) return;
+    setBusy(true); setError(""); setNotice(""); setAgentToken("");
+    try {
+      const result = await issueMonitoringAgent(token, filters.employee);
+      setAgentToken(result.token);
+      setNotice("Collector token issued. Copy it into the Chrome extension now; it will not be shown again.");
+      await load();
+    } catch (err) { setError(err.message); onAuthError(err); }
+    finally { setBusy(false); }
+  }
+
+  async function revokeAgent() {
+    if (!filters.employee) return;
+    setBusy(true); setError(""); setNotice(""); setAgentToken("");
+    try {
+      await revokeMonitoringAgent(token, filters.employee);
+      setNotice("Collector access revoked.");
+      await load();
+    } catch (err) { setError(err.message); onAuthError(err); }
+    finally { setBusy(false); }
+  }
+
+  const selectedEmployee = report?.employees?.find((row) => String(row.id) === String(filters.employee));
+
   return <>
     <div className="section-heading"><div><p className="eyebrow dark-eyebrow">WORKPLACE ACTIVITY</p><h2>Activity Monitoring</h2><p>Review website and application usage during working hours.</p></div></div>
     {error && <p className="message error" role="alert">{error}</p>}
@@ -41,6 +67,15 @@ export default function ActivityMonitoring({ token, onAuthError }) {
       <div><label htmlFor="activity-period">Report</label><select id="activity-period" value={filters.period} onChange={(event) => setFilters((current) => ({ ...current, period: event.target.value }))}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></div>
       <div><label htmlFor="activity-date">Report date</label><input id="activity-date" type="date" value={filters.date} onChange={(event) => setFilters((current) => ({ ...current, date: event.target.value }))} /></div>
     </section>
+    {selectedEmployee && <section className="panel activity-agent">
+      <div><h3>Chrome collector</h3><p>{selectedEmployee.agent_active
+        ? `Active${selectedEmployee.agent_last_seen_at ? ` · last received ${new Date(selectedEmployee.agent_last_seen_at).toLocaleString()}` : " · waiting for first activity"}`
+        : selectedEmployee.consent ? "Not configured" : "Waiting for the employee to acknowledge the disclosure"}</p></div>
+      {selectedEmployee.agent_active
+        ? <button className="button button-secondary" type="button" disabled={busy} onClick={revokeAgent}>Revoke collector</button>
+        : <button className="button button-coral" type="button" disabled={busy || !selectedEmployee.consent} onClick={issueAgent}>Issue collector token</button>}
+      {agentToken && <div className="agent-token"><label htmlFor="activity-agent-token">One-time collector token</label><input id="activity-agent-token" readOnly value={agentToken} onFocus={(event) => event.target.select()} /></div>}
+    </section>}
     {!report ? <p className="empty-state">Loading activity…</p> : report.total_seconds === 0 ? <section className="panel records-panel"><p className="empty-state">No data yet.</p></section> : <>
       <div className="summary-grid activity-summary">
         <div className="summary-card"><span>Total monitored time</span><strong>{duration(report.total_seconds)}</strong><small>{report.start_date} to {report.end_date}</small></div>

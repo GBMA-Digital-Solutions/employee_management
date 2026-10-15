@@ -214,10 +214,13 @@ UnlockResultSerializer = inline_serializer(name="UnlockResult", fields={
 def validate_attendance_action(employee, action):
     today = timezone.localdate()
     attendance = Attendance.objects.filter(employee=employee, date=today, shift="day").first()
-    active = bool(attendance and attendance.visits.filter(check_out_at__isnull=True).exists())
+    active = bool(attendance and (
+        attendance.visits.filter(check_out_at__isnull=True).exists()
+        or (attendance.check_in_at and not attendance.check_out_at and not attendance.finalized_at)
+    ))
     if action == "check_in" and attendance:
         raise serializers.ValidationError("Check In is only for your first arrival of the workday.")
-    if action == "scan_in" and (not attendance or active or attendance.finalized_at):
+    if action == "scan_in" and attendance and (active or attendance.finalized_at):
         raise serializers.ValidationError("Scan In is only available after a temporary Scan Out.")
     if action in {"scan_out", "check_out"} and not active:
         raise serializers.ValidationError("You must be inside the office before leaving.")
@@ -230,15 +233,23 @@ def record_door_attendance(employee, action):
     now = timezone.now()
     date = timezone.localdate(now)
     with transaction.atomic():
+        existing = Attendance.objects.select_for_update().filter(
+            employee=employee, date=date, shift="day",
+        ).first()
+        # The first entry scan of the day is also the employee's workday Check In.
+        if action == "scan_in" and existing is None:
+            action = "check_in"
         active = AttendanceVisit.objects.select_for_update().filter(
             attendance__employee=employee, check_out_at__isnull=True,
         ).select_related("attendance").first()
+        # Older/manual clock-ins created an Attendance row without a visit. Repair
+        # that open state so the employee can Scan Out through the door normally.
+        if (not active and existing and existing.check_in_at and not existing.check_out_at
+                and not existing.finalized_at):
+            active = AttendanceVisit.objects.create(attendance=existing, check_in_at=existing.check_in_at)
         if action in {"check_in", "scan_in"}:
             if active:
                 raise serializers.ValidationError("You are already inside the office.")
-            existing = Attendance.objects.select_for_update().filter(
-                employee=employee, date=date, shift="day",
-            ).first()
             if action == "check_in" and existing:
                 raise serializers.ValidationError("Check In is only for your first arrival of the workday.")
             if action == "scan_in" and (not existing or existing.finalized_at):

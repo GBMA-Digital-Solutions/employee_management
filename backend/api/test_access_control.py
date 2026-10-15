@@ -262,7 +262,7 @@ class AccessControlTests(APITestCase):
 
         missing = self.unlock(self.room, proof="tag-door-101")
         self.assertEqual(missing.status_code, 400)
-        first = self.unlock(self.room, proof="tag-door-101", attendance_action="check_in")
+        first = self.unlock(self.room, proof="tag-door-101", attendance_action="scan_in")
         self.assertEqual((first.status_code, first.data["attendance"]), (200, "check_in"))
         attendance = Attendance.objects.get(employee=self.aline, date=timezone.localdate(), shift="day")
         self.assertIsNotNone(attendance.check_in_at)
@@ -280,6 +280,21 @@ class AccessControlTests(APITestCase):
         self.assertEqual(closed.status_code, 400)
         self.assertEqual(Attendance.objects.filter(employee=self.aline).count(), 1)
         self.assertEqual(AttendanceVisit.objects.filter(attendance=attendance).count(), 2)
+
+    @override_settings(DOOR_GATEWAY=FAKE_GATEWAY)
+    def test_scan_out_repairs_an_open_clock_in_without_a_visit(self):
+        self.room.is_check_in_door = True
+        self.room.save(update_fields=["is_check_in_door"])
+        RoomAccessGrant.objects.create(room=self.room, employee=self.aline)
+        Attendance.objects.create(employee=self.aline, date=timezone.localdate(), shift="day",
+                                  status="present", check_in_at=timezone.now() - timedelta(hours=1))
+        self.as_user(self.aline_user)
+
+        response = self.unlock(self.room, proof="tag-door-101", attendance_action="scan_out")
+
+        self.assertEqual((response.status_code, response.data["attendance"]), (200, "scan_out"))
+        visit = AttendanceVisit.objects.get(attendance__employee=self.aline)
+        self.assertIsNotNone(visit.check_out_at)
 
         other = Room.objects.create(business=self.business, name="Office", building="Main", floor="2",
                                     door_identifier="office")
