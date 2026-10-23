@@ -38,9 +38,12 @@ class WokwiDoorTests(APITestCase):
                                 signature_status="signed", worker_approval_status="approved")
         self.room = Room.objects.create(business=business, name="Lab", building="Main", floor="1",
                                         door_identifier="door-101")
-        self.device = DoorDevice.objects.create(room=self.room, device_id="door-101",
-                                                secret_hash=hashlib.sha256(self.raw_secret.encode()).hexdigest(),
-                                                last_seen_at=timezone.now())
+        self.device = DoorDevice.objects.get(room=self.room)
+        self.device.device_id = "door-101"
+        self.device.mode = DoorDevice.HARDWARE
+        self.device.secret_hash = hashlib.sha256(self.raw_secret.encode()).hexdigest()
+        self.device.last_seen_at = timezone.now()
+        self.device.save()
 
     def signed_post(self, path, payload=None, nonce=None, timestamp=None, secret=None):
         body = json.dumps(payload or {}, separators=(",", ":")).encode()
@@ -133,6 +136,14 @@ class WokwiDoorTests(APITestCase):
 
     def test_browser_only_simulator_remains_confirmed(self):
         self.device.delete()
+        from .door_provisioning import ensure_device_for
+        ensure_device_for(self.room)
         response = self.start_and_unlock()
         self.assertEqual((response.status_code, response.data["unlock_status"]), (200, "confirmed"))
         self.assertFalse(DoorUnlockCommand.objects.exists())
+
+        self.client.force_authenticate(self.employer)
+        state = self.client.get(f"/api/access-control/simulator/{self.room.pk}/").data
+        self.assertEqual((state["esp32"]["mode"], state["esp32"]["connection"]), ("virtual", "online"))
+        self.assertFalse(state["esp32"]["relay_locked"])
+        self.assertTrue(state["esp32"]["last_command"]["simulated"])

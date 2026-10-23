@@ -24,7 +24,8 @@ class Command(BaseCommand):
         raw = os.getenv(options["secret_env"]) or secrets.token_urlsafe(32)
         derived = hashlib.sha256(raw.encode()).hexdigest()
         DoorDevice.objects.update_or_create(room=room, defaults={
-            "device_id": device_id, "secret_hash": derived, "enabled": True, "relay_locked": True,
+            "device_id": device_id, "mode": DoorDevice.HARDWARE,
+            "secret_hash": derived, "enabled": True, "relay_locked": True,
         })
         self.stdout.write(self.style.SUCCESS(f"Enrolled {device_id} for {room}."))
         if not os.getenv(options["secret_env"]):

@@ -679,12 +679,12 @@ function SimulatorPage({ token, onAuthError }) {
         <strong className="door-sim-state">{door.locked ? "Locked" : "Unlocked"}</strong>
         <p className="door-sim-note">{door.locked ? "Waiting for an authorized employee." : `Locks again in ${Math.ceil(door.relocks_in)} s`}</p>
         <div className="door-sim-device" aria-live="polite">
-          <strong>ESP32 controller</strong>
+          <strong>{door.esp32?.mode === "virtual" ? "Virtual ESP32 controller" : "ESP32 controller"}</strong>
           {!door.esp32?.configured ? <p>Not enrolled — browser-only simulation.</p> : <>
-            <p>Connection: <span className={`status-badge status-${door.esp32.connection === "online" ? "granted" : "denied"}`}>{door.esp32.connection}</span></p>
+            <p>Connection: <span className={`status-badge status-${door.esp32.connection === "online" ? "granted" : "denied"}`}>{door.esp32.connection}{door.esp32.mode === "virtual" ? " (browser)" : ""}</span></p>
             <p>Relay / maglock: <strong>{door.esp32.relay_locked ? "Locked (LED on)" : "Unlocked (LED off)"}</strong></p>
             <p>Last command: {door.esp32.last_command
-              ? `${door.esp32.last_command.state} · ${door.esp32.last_command.id}`
+              ? `${door.esp32.last_command.state}${door.esp32.last_command.simulated ? " (simulated)" : ""} · ${door.esp32.last_command.id}`
               : "No command sent yet"}</p>
           </>}
         </div>

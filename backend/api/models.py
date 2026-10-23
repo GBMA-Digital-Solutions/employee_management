@@ -777,9 +777,19 @@ class SimulatedDoor(models.Model):
 class DoorDevice(models.Model):
     """An enrolled controller. The raw shared secret is never stored."""
 
+    # A virtual controller is provisioned automatically for every room so the
+    # Door Simulator shows the same panel everywhere. It holds no secret and
+    # can never authenticate the signed endpoints; only an enrolled hardware
+    # controller can, which is what keeps a real unlock honest.
+    VIRTUAL = "virtual"
+    HARDWARE = "hardware"
+    MODES = [(VIRTUAL, "Virtual (browser-only simulation)"), (HARDWARE, "Enrolled hardware controller")]
+
     room = models.OneToOneField(Room, on_delete=models.CASCADE, related_name="door_device")
     device_id = models.CharField(max_length=100, unique=True)
-    secret_hash = models.CharField(max_length=64)
+    mode = models.CharField(max_length=10, choices=MODES, default=VIRTUAL)
+    # Empty for a virtual controller. Never the raw secret, only its SHA-256.
+    secret_hash = models.CharField(max_length=64, blank=True)
     enabled = models.BooleanField(default=True)
     last_seen_at = models.DateTimeField(null=True, blank=True)
     relay_locked = models.BooleanField(default=True)
