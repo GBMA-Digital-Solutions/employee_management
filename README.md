@@ -24,6 +24,7 @@ controller can be driven from the Access Control screens.
 - [Roles](#roles)
 - [API documentation](#api-documentation)
 - [Tests](#tests)
+- [Vercel and Render](#vercel-and-render)
 - [Wokwi ESP32 door](#wokwi-esp32-door)
 - [Project layout](#project-layout)
 - [Troubleshooting](#troubleshooting)
@@ -180,6 +181,19 @@ cd backend
 python manage.py migrate
 ```
 
+Migration `0047` adds an idempotent virtual ESP32 controller to every existing
+room that does not already have a controller. Every room created later gets one
+automatically. No simulated door enrollment step is required. To audit/repair
+this invariant at any time, run the same safe command that Render runs at
+startup:
+
+```powershell
+python manage.py initialize_door_controllers
+```
+
+It only creates missing virtual controllers. It never changes or deletes an
+existing virtual or hardware controller, its secret, or any business data.
+
 Then create the platform super admin. `seed` is idempotent and also creates the
 Managers group, so it is safe to re-run.
 
@@ -279,12 +293,65 @@ cd frontend
 npm run lint
 ```
 
+The production frontend build is:
+
+```powershell
+npm run build
+```
+
+## Vercel and Render
+
+Deploy the backend first. Render must use `backend` as the Root Directory,
+`bash build.sh` as the Build Command, `bash start.sh` as the Start Command, and
+`/api/health/` as its health check. `start.sh` migrates the database and runs
+the repeatable controller initializer before starting Gunicorn. This preserves
+all existing doors, employees, contracts, payroll records, and enrolled
+controller settings while filling only missing virtual controllers.
+
+Required Render environment variables:
+
+```dotenv
+DEBUG=false
+SECRET_KEY=<long-random-production-secret>
+DATABASE_URL=<Render-PostgreSQL-connection-string>
+FRONTEND_URL=https://<your-vercel-site>
+CORS_ALLOWED_ORIGINS=https://<your-vercel-site>
+ALLOWED_HOSTS=<your-render-hostname>.onrender.com
+```
+
+Optional backend variables are `BREVO_API_KEY` and `DEFAULT_FROM_EMAIL` for
+email, plus the three `DOOR_*_SECONDS` values documented in
+`backend/.env.example`. Set
+`DOOR_GATEWAY=api.wokwi_gateway.WokwiPollingGateway` only when an enrolled
+ESP32/Wokwi controller should poll this backend. Virtual browser controllers do
+not need a gateway or secret.
+
+Vercel must use `frontend` as its Root Directory and set:
+
+```dotenv
+VITE_API_URL=https://<your-render-service>.onrender.com
+```
+
+Do not append `/api`. Redeploy the frontend after changing it because Vite
+embeds the value at build time. Keep all device secrets in Render/local
+environment variables or `wokwi/secrets.h`; never use a `VITE_*` variable for a
+secret because those values are public in the browser bundle. See
+`docs/DEPLOYMENT.md` for the deployment checklist.
+
 ## Wokwi ESP32 door
 
-This is optional. It simulates a maglock on an ESP32 so a QR scan from an
-employee's phone physically unlocks a door in the simulation. Django authorizes
-the scan and queues a one-use command; the ESP32 only polls for commands that
-are already authorized, and signs every request with HMAC-SHA256.
+The Door Simulator works immediately in browser-only mode on local, Vercel, and
+Render installations. Selecting a room shows the same Connection,
+Relay / Maglock, and Last Command fields everywhere; the automatically created
+virtual controller follows the browser door state. Wokwi is not required for
+this mode, and its simulated commands are clearly labelled rather than being
+reported as a physical unlock.
+
+Wokwi is an optional hardware-controller demonstration. Django authorizes a QR
+scan and queues a one-use command; the ESP32 polls only for authorized commands
+and signs every request with HMAC-SHA256. A physical/hardware attempt remains
+unconfirmed until the signed controller acknowledgement arrives. Virtual
+controllers have no secret and are rejected by the device endpoints.
 
 Full detail is in `docs/WOKWI_DOOR.md`. The short path:
 
@@ -304,7 +371,9 @@ is ever queued. Restart Django after editing `.env`, because it is read only at
 startup.
 
 **2. Create the room in the app**, under Access Control, and note its door
-identifier (for example `Door 1`).
+identifier (for example `Door 1`). The room already has a virtual controller;
+the next step securely upgrades that same row to hardware rather than creating
+a duplicate.
 
 **3. Enroll the device.** The first argument is the room's door identifier, not
 the device id. The device id is the `--device-id` option. Getting these the

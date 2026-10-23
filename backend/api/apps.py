@@ -14,6 +14,9 @@ class ApiConfig(AppConfig):
     name = 'api'
 
     def ready(self):
+        # Registered before the test guard below: automatic provisioning is
+        # behaviour the tests cover, not a background service they skip.
+        from . import signals  # noqa: F401
         if getattr(settings, "RUNNING_TESTS", False):
             return
         self.start_reminder_scheduler()

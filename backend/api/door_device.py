@@ -29,14 +29,20 @@ def authenticated_device(request, device_id):
         fresh = abs(int(time.time()) - int(timestamp)) <= getattr(settings, "DOOR_SIGNATURE_WINDOW_SECONDS", 60)
     except (TypeError, ValueError):
         fresh = False
-    if not device or not fresh or not nonce or len(nonce) > 100 or len(supplied) != 64:
+    if (not device or device.mode != DoorDevice.HARDWARE or len(device.secret_hash) != 64 or
+            not fresh or not nonce or len(nonce) > 100 or len(supplied) != 64):
         return None
     nonce_key = f"door-nonce:{device.pk}:{nonce}"
     if not cache.add(nonce_key, True, timeout=getattr(settings, "DOOR_SIGNATURE_WINDOW_SECONDS", 60) * 2):
         return None
     body_hash = hashlib.sha256(request.body).hexdigest()
     canonical = "\n".join([request.method.upper(), request.path, timestamp, nonce, body_hash]).encode()
-    expected = hmac.new(bytes.fromhex(device.secret_hash), canonical, hashlib.sha256).hexdigest()
+    try:
+        key = bytes.fromhex(device.secret_hash)
+    except ValueError:
+        cache.delete(nonce_key)
+        return None
+    expected = hmac.new(key, canonical, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected, supplied.lower()):
         cache.delete(nonce_key)
         return None

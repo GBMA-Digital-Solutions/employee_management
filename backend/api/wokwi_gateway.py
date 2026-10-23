@@ -14,7 +14,8 @@ def online(device):
 
 
 def device_for(room):
-    return DoorDevice.objects.filter(room=room, enabled=True).first()
+    """Return only enrolled hardware; virtual rows never receive commands."""
+    return DoorDevice.objects.filter(room=room, mode=DoorDevice.HARDWARE, enabled=True).first()
 
 
 class WokwiPollingGateway(DoorGateway):
@@ -53,16 +54,41 @@ class WokwiPollingGateway(DoorGateway):
 
 
 def status_for_room(room):
-    device = device_for(room)
+    # Status includes virtual controllers so every Door Simulator renders the
+    # same Connection / Relay / Last Command panel. Authentication and command
+    # delivery above deliberately remain hardware-only.
+    device = DoorDevice.objects.filter(room=room, enabled=True).first()
     if not device:
         return {"configured": False, "connection": "not_configured", "relay_locked": True,
                 "last_command": None, "last_acknowledged_at": None}
+    if device.mode == DoorDevice.VIRTUAL:
+        from .door_simulator import active_doors
+
+        door = active_doors().filter(room=room).first()
+        now = timezone.now()
+        last_attempt = room.access_attempts.filter(
+            result="granted", unlock_status="confirmed", access_method="door_code",
+            created_at__gte=device.created_at,
+        ).order_by("-created_at").first()
+        return {
+            "configured": True,
+            "mode": DoorDevice.VIRTUAL,
+            "connection": "online" if door else "offline",
+            "relay_locked": not bool(door and door.unlocked_until and door.unlocked_until > now),
+            "last_command": ({
+                "id": f"simulation-{last_attempt.pk}", "state": "completed",
+                "created_at": last_attempt.created_at, "acknowledged_at": last_attempt.created_at,
+                "simulated": True,
+            } if last_attempt else None),
+            "last_acknowledged_at": last_attempt.created_at if last_attempt else None,
+        }
     command = device.commands.order_by("-created_at").first()
     if command and command.state in {"pending", "claimed"} and command.expires_at <= timezone.now():
         command.state = "expired"
         command.save(update_fields=["state"])
     return {
         "configured": True,
+        "mode": DoorDevice.HARDWARE,
         "connection": "online" if online(device) else "offline",
         "relay_locked": device.relay_locked,
         "last_command": ({"id": str(command.pk), "state": command.state,

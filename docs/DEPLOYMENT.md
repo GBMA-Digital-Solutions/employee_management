@@ -15,7 +15,13 @@ For the current backend, `https://employee-management-v2pz.onrender.com`, use th
 
 If Root Directory is empty instead, use `bash backend/build.sh` and `bash backend/start.sh`.
 
-The start script runs migrations before Gunicorn starts. Confirm migration `api.0006_business_alter_employee_email_alter_holiday_date_and_more` completes in Render's logs. It creates the business/account tables and adds workspace ownership; existing records remain in the original managers' workspace. No existing accounts or records are assigned to new public employers.
+The start script runs migrations and `initialize_door_controllers` before
+Gunicorn starts. Confirm migration `api.0047_door_device_mode` completes in
+Render's logs. It preserves every existing controller as hardware when it has a
+secret and creates a secretless virtual controller only for rooms that do not
+have one. The initializer is idempotent and repairs missing rows on later
+starts; it does not change existing doors, employees, contracts, payroll, or
+controller configuration.
 
 Keep the existing production `SECRET_KEY` and `DATABASE_URL` configured. Set these frontend settings on the **active backend service**:
 
@@ -23,7 +29,13 @@ Keep the existing production `SECRET_KEY` and `DATABASE_URL` configured. Set the
 DEBUG=false
 FRONTEND_URL=https://employee-management-one-sooty.vercel.app
 CORS_ALLOWED_ORIGINS=https://employee-management-one-sooty.vercel.app,https://employee-management-idwumevl9-ndinayo-erics-projects.vercel.app
+ALLOWED_HOSTS=employee-management-v2pz.onrender.com
 ```
+
+No door variables are required for browser-only simulation. Only set
+`DOOR_GATEWAY=api.wokwi_gateway.WokwiPollingGateway` when an enrolled ESP32
+must poll the deployed API. Device secrets must never be placed in Vercel or a
+`VITE_*` variable.
 
 Use the origins without quotes, paths, trailing slashes or `#sign-in`. Add another exact origin if you use a different preview deployment URL. Save and deploy the environment changes. A healthy API responds to `/api/health/` with `{"status":"ok"}`.
 
