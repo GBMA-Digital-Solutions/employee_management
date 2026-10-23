@@ -64,7 +64,12 @@ def gateway_for(room):
     from .door_simulator import SimulatorGateway, active_doors
 
     door = active_doors().filter(room=room).first()
-    return SimulatorGateway(door) if door else gateway()
+    hardware = gateway()
+    # The Wokwi gateway is room-specific; other gateway implementations retain
+    # their original no-argument construction contract.
+    if hasattr(hardware, "for_room"):
+        hardware = hardware.for_room(room)
+    return SimulatorGateway(door, hardware) if door else hardware
 
 
 def device_status(room, context):
@@ -77,4 +82,7 @@ def device_status(room, context):
         return "simulator"
     if "gateway" not in context:
         context["gateway"] = gateway()
-    return context["gateway"].device_status(room)
+    selected = context["gateway"]
+    if hasattr(selected, "for_room"):
+        selected = selected.for_room(room)
+    return selected.device_status(room)

@@ -15,7 +15,7 @@ class ActivityMonitoringTests(APITestCase):
         AccountProfile.objects.create(user=self.employer, role="employer", business=self.business)
         self.employee = Employee.objects.create(
             business=self.business, first_name="Ada", last_name="Lovelace", email="ada@example.com",
-            job_title="Engineer", date_joined=timezone.localdate(),
+            job_title="Engineer", date_joined=timezone.localdate(), is_active=True,
         )
         self.employee_user = get_user_model().objects.create_user("ada", password="pass")
         AccountProfile.objects.create(user=self.employee_user, role="employee", employee=self.employee)
@@ -66,8 +66,11 @@ class ActivityMonitoringTests(APITestCase):
 
     def test_reports_are_company_scoped_and_domains_are_classified(self):
         other = Business.objects.create(name="Other")
+        # Active on purpose, so the exclusion below proves company scoping
+        # rather than simply skipping an inactive employee.
         outsider = Employee.objects.create(business=other, first_name="Other", last_name="Worker",
-                                            email="other@example.com", job_title="Dev", date_joined=timezone.localdate())
+                                            email="other@example.com", job_title="Dev",
+                                            date_joined=timezone.localdate(), is_active=True)
         now = timezone.now()
         ActivityEvent.objects.create(employee=self.employee, source="browser", kind="website",
                                      resource="https://youtube.com/", domain="youtube.com",

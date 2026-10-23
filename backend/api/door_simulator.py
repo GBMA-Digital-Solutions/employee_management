@@ -56,8 +56,10 @@ def active_room_ids():
 
 
 class SimulatorGateway(DoorGateway):
-    def __init__(self, door):
+    def __init__(self, door, hardware=None):
         self.door = door
+        self.hardware = hardware
+        self.command = None
 
     def device_status(self, room):
         return "simulator"
@@ -66,9 +68,13 @@ class SimulatorGateway(DoorGateway):
         return method == "door_code" and code_matches(self.door, proof)
 
     def unlock(self, room, user):
+        result = True
+        if self.hardware and self.hardware.configured:
+            result = self.hardware.unlock(room, user)
+            self.command = getattr(self.hardware, "command", None)
         self.door.unlocked_until = timezone.now() + timedelta(seconds=UNLOCK_SECONDS)
         self.door.save(update_fields=["unlocked_until"])
-        return True
+        return result
 
 
 def state(door):
@@ -77,6 +83,7 @@ def state(door):
     room = door.room
     recent = RoomAccessAttempt.objects.filter(room=room, created_at__gte=door.started_at).select_related("business")[:5]
     seconds = time.time()
+    from .wokwi_gateway import status_for_room
     return {
         "room": room.pk, "room_name": room.name, "building": room.building, "floor": room.floor,
         "is_check_in_door": room.is_check_in_door,
@@ -85,6 +92,7 @@ def state(door):
         "code_changes_in": round(CODE_PERIOD - seconds % CODE_PERIOD),
         "started_by": door.started_by, "started_at": door.started_at,
         "recent": RoomAccessAttemptSerializer(recent, many=True).data,
+        "esp32": status_for_room(room),
     }
 
 
@@ -98,6 +106,7 @@ SimulatorStateSerializer = inline_serializer(name="DoorSimulatorState", fields={
     "code_changes_in": serializers.IntegerField(help_text="Seconds until the door code changes."),
     "started_by": serializers.CharField(),
     "started_at": serializers.DateTimeField(), "recent": serializers.ListField(child=serializers.DictField()),
+    "esp32": serializers.DictField(),
 })
 
 

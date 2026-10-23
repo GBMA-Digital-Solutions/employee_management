@@ -64,7 +64,10 @@ def workspace_responses(success, **kwargs):
 def employee_record(user):
     """The Employee row an employer created for this account, if any."""
     profile = getattr(user, "account_profile", None)
-    return profile.employee if profile and profile.employee_id else None
+    # Fetch by id instead of returning a possibly cached related object.  An
+    # approval request can activate the employee in a separate transaction,
+    # and the next authenticated request must observe that transition.
+    return Employee.objects.filter(pk=profile.employee_id).first() if profile and profile.employee_id else None
 
 
 def employee_has_signed_contract(employee):

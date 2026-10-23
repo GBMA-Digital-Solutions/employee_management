@@ -59,6 +59,8 @@ export default function EmployeePayroll({ token }) {
 
   const salary = payroll?.salary;
   const currency = salary?.currency || "RWF";
+  const requestedAmount = Number(form?.amount || 0);
+  const requestCharge = requestedAmount * Number(salary?.advance_charge_percent || 0) / 100;
   const months = payroll?.months || [];
   const payslips = payroll?.payslips || [];
   const advances = payroll?.advances || [];
@@ -104,13 +106,13 @@ export default function EmployeePayroll({ token }) {
       <div className="leave-lists">
         <section className="panel account-panel"><h3>Advance requests</h3>
           {!requests.length ? <p className="empty-state">You have not requested a salary advance.</p> : <div className="leave-history-list">{requests.map((item) => <div className="leave-history-row" key={item.id}>
-            <div><strong>{money(item.amount, item.currency)}</strong><span>Requested {new Date(item.requested_at).toLocaleDateString()}{item.reason ? ` · ${item.reason}` : ""}</span>{item.status !== "pending" && item.decided_at && <small>{decisionText(item.status, item.decided_by, item.decided_at)}</small>}{item.decision_notes && <small>{item.decision_notes}</small>}</div>
+            <div><strong>{money(item.amount, item.currency)}</strong><span>Charge {money(item.charge_amount, item.currency)} ({item.charge_percent}%) · total repayment {money(item.total_repayment, item.currency)}</span><span>Requested {new Date(item.requested_at).toLocaleDateString()}{item.reason ? ` · ${item.reason}` : ""}</span>{item.status !== "pending" && item.decided_at && <small>{decisionText(item.status, item.decided_by, item.decided_at)}</small>}{item.decision_notes && <small>{item.decision_notes}</small>}</div>
             <div><span className={`status-badge status-${item.status}`}>{label(item.status)}</span>{item.status === "pending" && <button className="text-button danger-link" disabled={busy} type="button" onClick={() => cancel(item)}>Cancel</button>}</div>
           </div>)}</div>}
         </section>
         <section className="panel account-panel"><h3>Salary advances</h3>
           {!advances.length ? <p className="empty-state">No salary advances.</p> : <div className="leave-history-list">{advances.map((item) => <div className="leave-history-row" key={item.id}>
-            <div><strong>{money(item.amount, item.currency)}</strong><span>Given {item.issue_date} · repaid {money(item.total_repaid, item.currency)} · outstanding {money(item.outstanding_balance, item.currency)}</span>{Number(item.next_installment) > 0 && <small>Next deduction: up to {money(item.next_installment, item.currency)}</small>}</div>
+            <div><strong>{money(item.amount, item.currency)} advance</strong><span>One-time charge {money(item.charge_amount, item.currency)} ({item.charge_percent}%) · total repayment {money(item.total_repayment, item.currency)}</span><span>Given {item.issue_date} · repaid {money(item.total_repaid, item.currency)} · outstanding {money(item.outstanding_balance, item.currency)}</span>{Number(item.next_installment) > 0 && <small>Next deduction: up to {money(item.next_installment, item.currency)}</small>}</div>
             <div><span className={`status-badge status-${item.status === "repaid" ? "paid" : "approved"}`}>{ADVANCE_STATUS[item.status] || label(item.status)}</span></div>
           </div>)}</div>}
         </section>
@@ -120,9 +122,11 @@ export default function EmployeePayroll({ token }) {
     {form && <ModalDialog title="Request salary advance" onClose={() => setForm(null)}><form className="account-panel leave-request-form" onSubmit={submit}>
       <h3>Request salary advance</h3>
       <fieldset className="auth-fields" disabled={busy}>
-        <label htmlFor="advance-amount">Amount ({currency})</label><input id="advance-amount" type="number" min="1" step="0.01" value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} required />
+        <label htmlFor="advance-amount">Amount ({currency})</label><input id="advance-amount" type="number" min="1" max={salary.maximum_advance} step="0.01" value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} required />
+        <p className="muted">Maximum: {money(salary.maximum_advance, currency)} (30% of your monthly net salary).</p>
+        {requestedAmount > 0 && <div className="summary-card"><span>Advance</span><strong>{money(requestedAmount, currency)}</strong><small>One-time charge: {money(requestCharge, currency)} ({salary.advance_charge_percent}%)</small><small>Total repayment: {money(requestedAmount + requestCharge, currency)}</small></div>}
         <label htmlFor="advance-reason">Reason (optional)</label><textarea id="advance-reason" rows="3" value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} />
-        <p className="muted">Your employer reviews the request. Once approved, the advance is deducted automatically from your salary.</p>
+        <p className="muted">Your employer reviews the request. Once approved, the total repayment is deducted automatically from the next salary payment, subject to the payroll deduction limit.</p>
         <button className="button button-coral" type="submit" disabled={busy}>{busy ? "Sending…" : "Send request"}</button>
       </fieldset>
     </form></ModalDialog>}

@@ -161,7 +161,8 @@ class BusinessIsolationTests(APITestCase):
 
     def make_records(self, business, index):
         employee = Employee.objects.create(business=business, first_name=f"Person {index}", last_name="Example",
-            email="shared@example.com", department="Operations", job_title="Analyst", date_joined="2026-01-01")
+            email="shared@example.com", department="Operations", job_title="Analyst", date_joined="2026-01-01",
+            is_active=True)
         return {
             "employees": employee,
             "contracts": Contract.objects.create(employee=employee, title="Contract", start_date="2026-01-01", end_date="2026-09-29"),
@@ -303,7 +304,7 @@ class EmployeeOnboardingTests(APITestCase):
         return match.group(1)
 
     def signed_contract(self, employee, approved=True):
-        return Contract.objects.create(
+        contract = Contract.objects.create(
             employee=employee,
             title="Signed employment contract",
             start_date=timezone.localdate(),
@@ -311,6 +312,10 @@ class EmployeeOnboardingTests(APITestCase):
             signature_status="signed",
             worker_approval_status="approved" if approved else "pending",
         )
+        if approved and not employee.is_active:
+            employee.is_active = True
+            employee.save(update_fields=["is_active"])
+        return contract
 
     def test_hire_needs_only_names_title_and_email(self):
         result = self.hire()
@@ -339,6 +344,85 @@ class EmployeeOnboardingTests(APITestCase):
         # employer is never shown it when delivery succeeded.
         self.assertNotIn("temporary_password", result.data["invite"])
         self.assertTrue(account.user.check_password(self.emailed_password()))
+
+    def test_employee_status_follows_account_contract_approval_and_deactivation(self):
+        hired = self.hire()
+        employee = Employee.objects.get(pk=hired.data["id"])
+        self.assertEqual(hired.data["workflow_status"], "invited")
+        self.assertFalse(employee.is_active)
+
+        employee.account.must_change_password = False
+        employee.account.save(update_fields=["must_change_password"])
+        self.assertEqual(self.client.get(f"/api/employees/{employee.pk}/").data["workflow_status"], "no_contract")
+
+        contract = Contract.objects.create(
+            employee=employee, title="Employment agreement",
+            start_date=timezone.localdate(), status="draft",
+        )
+        self.assertEqual(self.client.get(f"/api/employees/{employee.pk}/").data["workflow_status"], "pending_contract")
+
+        contract.signature_status = "signed"
+        contract.save(update_fields=["signature_status"])
+        pending = self.client.get(f"/api/employees/{employee.pk}/").data
+        self.assertEqual(pending["workflow_status"], "pending_approval")
+        self.assertEqual(pending["pending_approval_contract_id"], contract.pk)
+        employee.refresh_from_db()
+        self.assertFalse(employee.is_active)
+
+        approved = self.client.post(f"/api/contracts/{contract.pk}/approve-worker/", {}, format="json")
+        self.assertEqual(approved.status_code, 200, approved.data)
+        self.assertEqual(approved.data["status"], "active")
+        employee.refresh_from_db()
+        self.assertTrue(employee.is_active)
+        self.assertEqual(self.client.get(f"/api/employees/{employee.pk}/").data["workflow_status"], "active")
+
+        deactivated = self.client.patch(
+            f"/api/employees/{employee.pk}/", {"is_active": False}, format="json"
+        )
+        self.assertEqual(deactivated.status_code, 200, deactivated.data)
+        self.assertEqual(deactivated.data["workflow_status"], "inactive")
+
+    def test_ended_contract_reads_as_past_employee_not_pending_approval(self):
+        """A contract that was approved and then terminated leaves nothing to
+        approve, so the employee must not sit in the pending-approval queue."""
+        hired = self.hire()
+        employee = Employee.objects.get(pk=hired.data["id"])
+        employee.account.must_change_password = False
+        employee.account.save(update_fields=["must_change_password"])
+        contract = self.signed_contract(employee)
+
+        contract.status = "terminated_mutual"
+        contract.save(update_fields=["status"])
+        employee.is_active = False
+        employee.save(update_fields=["is_active"])
+
+        ended = self.client.get(f"/api/employees/{employee.pk}/").data
+        self.assertEqual(ended["workflow_status"], "inactive")
+        self.assertIsNone(ended["pending_approval_contract_id"])
+
+        # Rehiring on a fresh signature still has to reach the employer.
+        rehire = Contract.objects.create(
+            employee=employee, title="New employment agreement",
+            start_date=timezone.localdate(), status="draft",
+            signature_status="signed",
+        )
+        pending = self.client.get(f"/api/employees/{employee.pk}/").data
+        self.assertEqual(pending["workflow_status"], "pending_approval")
+        self.assertEqual(pending["pending_approval_contract_id"], rehire.pk)
+
+    def test_password_change_does_not_activate_employee(self):
+        self.hire()
+        password = self.emailed_password()
+        employee = Employee.objects.get(email="aline@example.com")
+        self.client.force_authenticate(employee.account.user)
+        changed = self.client.post("/api/account/password/", {
+            "current_password": password,
+            "new_password": "Umbrella-Mountain-93",
+            "new_password_confirm": "Umbrella-Mountain-93",
+        }, format="json")
+        self.assertEqual(changed.status_code, 200, changed.data)
+        employee.refresh_from_db()
+        self.assertFalse(employee.is_active)
 
     def test_employee_workspace_is_locked_until_employer_approves_signed_contract(self):
         self.hire()

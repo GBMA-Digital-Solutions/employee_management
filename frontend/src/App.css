@@ -670,6 +670,8 @@ td small {
 .time-clock-card .eyebrow { margin: 0 0 5px; }
 .time-clock-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .time-clock-heading h3 { margin: 0; }
+.time-clock-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 16px 0 4px; }
+.time-clock-actions .muted { margin: 0; font-size: 13px; }
 .clock-times { padding: 18px 0; border-top: 1px solid #e4ded4; border-bottom: 1px solid #e4ded4; }
 .clock-times .location-badge { margin-left: 8px; }
 .attendance-visits { display: grid; gap: 8px; margin-top: 18px; padding-top: 18px; border-top: 1px solid #e5ded2; }

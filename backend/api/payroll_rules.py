@@ -58,7 +58,8 @@ def advance_figures(advance, exclude_payroll=None):
         elif calculation_is_current(repayment.payroll):
             repaid += repayment.amount
     # A recorded advance counts as given to the employee; disbursement details are optional.
-    outstanding = max(advance.amount - repaid, ZERO)
+    repayment_total = advance.total_repayment or advance.amount
+    outstanding = max(repayment_total - repaid, ZERO)
     if outstanding == ZERO:
         status = "repaid"
     elif repaid > ZERO:

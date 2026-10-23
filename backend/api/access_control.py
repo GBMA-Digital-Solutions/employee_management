@@ -538,7 +538,7 @@ class RoomUnlockView(APIView):
         profile = getattr(user, "account_profile", None)
 
         def record(result, reason="", unlock_status=""):
-            RoomAccessAttempt.objects.create(
+            return RoomAccessAttempt.objects.create(
                 business_id=room.business_id, room=room, room_name=room.name, building=room.building,
                 floor=room.floor, user=user, employee=employee_record(user), user_name=actor_name(user),
                 user_email=user.email, user_role=profile.role if profile else "manager",
@@ -564,9 +564,21 @@ class RoomUnlockView(APIView):
                 })
             validate_attendance_action(employee, attendance_action)
         gateway = door_hardware.gateway_for(room)
+        at_check_in_door = room.is_check_in_door and employee is not None
+        leaving = attendance_action in {"scan_out", "check_out"}
         if not gateway.configured:
-            return deny("hardware_not_configured", status.HTTP_503_SERVICE_UNAVAILABLE,
-                        "Door hardware integration is not configured for this room. No unlock command was sent.")
+            # Going out does not need the door opened, and refusing here would
+            # strand whoever is inside for as long as the door stays offline.
+            if not (at_check_in_door and leaving):
+                return deny("hardware_not_configured", status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "Door hardware integration is not configured for this room. No unlock command was sent.")
+            record("granted", unlock_status="failed")
+            recorded = record_door_attendance(employee, attendance_action)
+            return Response({
+                "detail": ("The door is offline, so no unlock was sent. "
+                           + OFFLINE_MESSAGES[recorded]),
+                "result": "granted", "unlock_status": "failed", "attendance": recorded,
+            })
         max_distance = gateway.max_distance_cm
         distance = serializer.validated_data.get("distance_cm")
         if max_distance is not None and (distance is None or distance > max_distance):
@@ -582,7 +594,12 @@ class RoomUnlockView(APIView):
             return Response({"detail": "Access was granted, but the door controller did not respond. "
                                        "The door may still be locked."}, status=status.HTTP_502_BAD_GATEWAY)
         unlock_status = "confirmed" if confirmed else "unconfirmed"
-        record("granted", unlock_status=unlock_status)
+        attempt = record("granted", unlock_status=unlock_status)
+        command = getattr(gateway, "command", None)
+        if command is not None:
+            command.access_attempt = attempt
+            command.state = "pending"
+            command.save(update_fields=["access_attempt", "state"])
         attendance = record_door_attendance(employee, attendance_action) if (
             room.is_check_in_door and employee is not None
         ) else None
@@ -596,6 +613,12 @@ class RoomUnlockView(APIView):
         detail += messages.get(attendance, "")
         return Response({"detail": detail, "result": "granted", "unlock_status": unlock_status,
                          "attendance": attendance})
+
+
+OFFLINE_MESSAGES = {
+    "scan_out": "Your temporary Scan Out was recorded.",
+    "check_out": "Your workday is now checked out.",
+}
 
 
 # --- Employee ------------------------------------------------------------------

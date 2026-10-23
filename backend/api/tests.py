@@ -19,11 +19,15 @@ class ManagerWorkflowTests(APITestCase):
         self.manager.groups.add(Group.objects.get(name="Managers"))
         self.client.force_authenticate(self.manager)
         self.employee = Employee.objects.create(first_name="Ada", last_name="Dube", email="ada@example.com",
-            department="Operations", job_title="Analyst", date_joined="2026-01-01")
+            department="Operations", job_title="Analyst", date_joined="2026-01-01", is_active=True)
         self.employee.refresh_from_db()
 
     def approved_contract(self, employee=None, **fields):
-        return Contract.objects.create(**{"employee": employee or self.employee, "title": "Employment",
+        worker = employee or self.employee
+        if not worker.is_active:
+            worker.is_active = True
+            worker.save(update_fields=["is_active"])
+        return Contract.objects.create(**{"employee": worker, "title": "Employment",
                                           "start_date": "2026-01-01", "signature_status": "signed",
                                           "worker_approval_status": "approved", **fields})
 
@@ -97,12 +101,12 @@ class ManagerWorkflowTests(APITestCase):
             result = self.client.post("/api/employees/", {
                 "first_name": "Zola", "last_name": "Mbeki", "email": "zola@example.com",
                 "department": "Design", "job_title": "Designer", "date_joined": "2026-03-01",
-                "employment_type": "full_time", "is_active": "true", "phone": "", "manager_name": "",
+                "employment_type": "full_time", "phone": "", "manager_name": "",
                 "address": "", "emergency_contact": "", "job_description": "",
                 "photo": SimpleUploadedFile("zola.png", self.png_bytes(), content_type="image/png"),
             }, format="multipart")
             self.assertEqual(result.status_code, 201, result.data)
-            self.assertIs(result.data["is_active"], True)
+            self.assertIs(result.data["is_active"], False)
             self.assertEqual(result.data["phone"], "")
             self.assertTrue(result.data["photo_name"].endswith(".png"))
             served = self.client.get(f'/api/employees/{result.data["id"]}/photo/')
@@ -145,6 +149,49 @@ class ManagerWorkflowTests(APITestCase):
             self.assertEqual(self.client.delete(f'/api/contracts/{created.data["id"]}/').status_code, 204)
             self.assertTrue(os.path.exists(stored))
 
+    def test_a_contract_can_be_created_with_several_documents(self):
+        """Supporting files are not limited to one, nor to PDFs."""
+        with TemporaryDirectory() as media, override_settings(MEDIA_ROOT=media):
+            created = self.client.post("/api/contracts/", {
+                "employee": self.employee.id, "title": "Agreement", "start_date": "2026-01-01",
+                "documents": [
+                    SimpleUploadedFile("deal.pdf", b"%PDF-1.4 one", content_type="application/pdf"),
+                    SimpleUploadedFile("rates.xlsx", b"rates", content_type="application/vnd.ms-excel"),
+                    SimpleUploadedFile("scan.png", b"scan", content_type="image/png"),
+                ]}, format="multipart")
+            self.assertEqual(created.status_code, 201, created.data)
+            names = [item["name"] for item in created.data["attachments"]]
+            self.assertEqual(len(names), 3)
+            self.assertTrue(names[0].endswith(".pdf"))
+            self.assertEqual(sorted(name.rsplit(".", 1)[-1] for name in names), ["pdf", "png", "xlsx"])
+
+            contract = Contract.objects.get(pk=created.data["id"])
+            # The first file keeps the contract's own slot, so the existing
+            # download link still resolves.
+            self.assertTrue(contract.document)
+            self.assertEqual(contract.extra_documents.count(), 2)
+            primary = self.client.get(f"/api/contracts/{contract.pk}/document/")
+            self.assertEqual(primary.status_code, 200)
+            primary.close()
+
+            extra = created.data["attachments"][2]
+            served = self.client.get(f'/api/contracts/{contract.pk}/attachments/{extra["id"]}/')
+            self.assertEqual(served.status_code, 200)
+            self.assertEqual(b"".join(served.streaming_content), b"scan")
+            served.close()
+
+    def test_an_attachment_of_another_contract_is_not_served(self):
+        with TemporaryDirectory() as media, override_settings(MEDIA_ROOT=media):
+            first = self.client.post("/api/contracts/", {"employee": self.employee.id, "title": "A",
+                "start_date": "2026-01-01", "documents": [
+                    SimpleUploadedFile("a.pdf", b"a", content_type="application/pdf"),
+                    SimpleUploadedFile("b.pdf", b"b", content_type="application/pdf")]}, format="multipart")
+            second = self.client.post("/api/contracts/", {"employee": self.employee.id, "title": "B",
+                "start_date": "2026-02-01"}, format="multipart")
+            stray = first.data["attachments"][1]["id"]
+            missing = self.client.get(f'/api/contracts/{second.data["id"]}/attachments/{stray}/')
+            self.assertEqual(missing.status_code, 404)
+
     def test_employee_form_can_attach_a_contract_document(self):
         with TemporaryDirectory() as media, override_settings(MEDIA_ROOT=media):
             result = self.client.patch(f"/api/employees/{self.employee.id}/", {
@@ -183,7 +230,7 @@ class ManagerWorkflowTests(APITestCase):
             payload = {
                 "first_name": "Nia", "last_name": "Keza", "email": "nia@example.com",
                 "department": "Legal", "job_title": "Counsel", "date_joined": "2026-04-01",
-                "employment_type": "full_time", "is_active": "true",
+                "employment_type": "full_time",
                 "photo": SimpleUploadedFile("nia.png", self.png_bytes(), content_type="image/png"),
                 "contract_document": SimpleUploadedFile("nia.pdf", b"%PDF-1.4 nia", content_type="application/pdf"),
             }
@@ -194,7 +241,7 @@ class ManagerWorkflowTests(APITestCase):
             # a rejected contract must not leave a half-created employee behind
             payload["email"] = "other@example.com"
             payload["photo"] = SimpleUploadedFile("o.png", self.png_bytes(), content_type="image/png")
-            payload["contract_document"] = SimpleUploadedFile("o.txt", b"not a contract", content_type="text/plain")
+            payload["contract_document"] = SimpleUploadedFile("o.exe", b"not a contract", content_type="application/octet-stream")
             failed = self.client.post("/api/employees/", payload, format="multipart")
             self.assertEqual(failed.status_code, 400, failed.data)
             self.assertFalse(Employee.objects.filter(email="other@example.com").exists())
@@ -423,8 +470,8 @@ class ManagerWorkflowTests(APITestCase):
         self.assertEqual(self.client.delete(f'/api/payroll/{created.data["id"]}/').status_code, 204)
 
     def test_reports_distinguish_absent_leave_missing_and_hours(self):
-        other = Employee.objects.create(first_name="Ben", last_name="Molefe", email="ben@example.com", department="HR", job_title="Lead", date_joined="2026-01-01")
-        missing = Employee.objects.create(first_name="Cleo", last_name="Nkosi", email="cleo@example.com", department="HR", job_title="Assistant", date_joined="2026-01-01")
+        other = Employee.objects.create(first_name="Ben", last_name="Molefe", email="ben@example.com", department="HR", job_title="Lead", date_joined="2026-01-01", is_active=True)
+        missing = Employee.objects.create(first_name="Cleo", last_name="Nkosi", email="cleo@example.com", department="HR", job_title="Assistant", date_joined="2026-01-01", is_active=True)
         Attendance.objects.create(employee=self.employee, date="2026-09-23", status="remote", hours_worked=Decimal("7.50"))
         Attendance.objects.create(employee=self.employee, date="2026-09-24", status="absent", hours_worked=0)
         LeaveRequest.objects.create(employee=other, start_date="2026-09-24", end_date="2026-09-25", status="approved")

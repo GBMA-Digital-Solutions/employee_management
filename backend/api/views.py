@@ -17,7 +17,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from . import contract_pay, leave_management, onboarding, payroll_rules
-from .models import (AccountProfile, Employee, Contract, ContractTerminationRequest,
+from .models import (AccountProfile, Employee, Contract, ContractDocument, ContractTerminationRequest,
                      Attendance, LeaveBalance, LeaveRequest, Holiday, Announcement,
                      CalendarEvent, Salary, Payroll)
 from .permissions import IsManager, business_id_for
@@ -409,14 +409,19 @@ class ContractViewSet(ManagerViewSet):
             contract = Contract.objects.select_for_update().get(pk=self.get_object().pk)
             if contract.signature_status != "signed":
                 raise serializers.ValidationError("The employee must sign this contract before approval.")
-            if contract.status != "active":
-                raise serializers.ValidationError("Only an active contract can approve a worker.")
             if contract.worker_approval_status == "approved":
                 raise serializers.ValidationError("This worker has already been approved.")
+            # Approval is the transition that makes both the signed contract
+            # and the employee operational. A contract remains draft while it
+            # moves through signing; it must not need to be active beforehand.
+            contract.status = "active"
             contract.worker_approval_status = "approved"
             contract.worker_approved_at = timezone.now()
             contract.worker_approved_by = request.user.get_full_name().strip() or request.user.username
-            contract.save(update_fields=["worker_approval_status", "worker_approved_at", "worker_approved_by"])
+            contract.save(update_fields=["status", "worker_approval_status", "worker_approved_at", "worker_approved_by"])
+            if not contract.employee.is_active:
+                contract.employee.is_active = True
+                contract.employee.save(update_fields=["is_active"])
             contract_pay.sync_salary(contract)
         emailed = onboarding.send_contract_worker_approval_notification(contract, "approved")
         data = self.get_serializer(contract).data
@@ -477,6 +482,21 @@ class ContractViewSet(ManagerViewSet):
     @action(detail=True, methods=["get"])
     def preview(self, request, pk=None):
         return self.document_response(as_download=False)
+
+    @action(detail=True, methods=["get"], url_path=r"attachments/(?P<attachment_id>[0-9]+)")
+    def attachment(self, request, pk=None, attachment_id=None):
+        """Download one of the extra files attached to this contract."""
+        contract = self.get_object()
+        try:
+            record = contract.extra_documents.get(pk=attachment_id)
+        except ContractDocument.DoesNotExist:
+            raise Http404("That file is not attached to this contract.")
+        try:
+            handle = record.file.open("rb")
+        except FileNotFoundError:
+            raise Http404("The attached file could not be found.")
+        return FileResponse(handle, as_attachment=True,
+                            filename=record.file.name.rsplit("/", 1)[-1])
 
     def document_response(self, *, as_download):
         contract = self.get_object()

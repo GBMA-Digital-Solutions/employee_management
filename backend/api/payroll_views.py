@@ -192,7 +192,8 @@ class SalaryAdvanceRequestViewSet(mixins.ListModelMixin, mixins.RetrieveModelMix
                 "notes": f"Requested by the employee on {timezone.localtime(record.requested_at):%Y-%m-%d}.",
             }, context=self.get_serializer_context())
             advance.is_valid(raise_exception=True)
-            advance.save()
+            advance.save(charge_percent=record.charge_percent, charge_amount=record.charge_amount,
+                         total_repayment=record.total_repayment, installment_amount=record.total_repayment)
             return self.decide(record, "approved", payload.validated_data["decision_notes"], advance.instance)
 
     @extend_schema(summary="Reject a salary advance request",
