@@ -5,151 +5,83 @@ companies: each company's employer runs their own workspace, their employees
 reach only their own records, and a single platform owner (super admin) manages
 the companies themselves.
 
-React frontend, Django REST Framework backend, PostgreSQL, JWT authentication.
+The stack is a React frontend (Vite), a Django REST Framework backend,
+PostgreSQL, and JWT authentication. An optional Wokwi-simulated ESP32 door
+controller can be driven from the Access Control screens.
 
 ## Contents
 
-- [Features](#features)
-- [Technology stack](#technology-stack)
-- [Project structure](#project-structure)
-- [Prerequisites](#prerequisites)
-- [Setup](#setup)
-- [Running locally](#running-locally)
-- [Roles and accounts](#roles-and-accounts)
+- [What you get](#what-you-get)
+- [Requirements](#requirements)
+- [1. Clone the repository](#1-clone-the-repository)
+- [2. Create the virtual environment](#2-create-the-virtual-environment)
+- [3. Install backend dependencies](#3-install-backend-dependencies)
+- [4. Create the PostgreSQL database](#4-create-the-postgresql-database)
+- [5. Configure backend/.env](#5-configure-backendenv)
+- [6. Migrate and create the admin](#6-migrate-and-create-the-admin)
+- [7. Install frontend dependencies](#7-install-frontend-dependencies)
+- [8. Run the project](#8-run-the-project)
+- [Roles](#roles)
 - [API documentation](#api-documentation)
-- [Tests and checks](#tests-and-checks)
-- [Building](#building)
-- [Deployment](#deployment)
+- [Tests](#tests)
+- [Wokwi ESP32 door](#wokwi-esp32-door)
+- [Project layout](#project-layout)
 - [Troubleshooting](#troubleshooting)
 
-## Features
+## What you get
 
-**Super admin (platform owner)**
+**Super admin (platform owner).** Platform dashboard with company counts,
+employer and employee totals, usage over today / 7 days / 30 days, and a
+12-month growth chart. Company lifecycle (create a company with its employer,
+change status between pending, active and suspended, or delete it). Account
+issue reports, live platform health (database ping, email sender state, disk
+usage), and two-way messaging with any company.
 
-- Platform dashboard: company counts by status, employers, employees, usage over
-  today / 7 days / 30 days, month-on-month growth with a 12-month chart, and
-  total platform users. Every figure is counted from live rows.
-- Company lifecycle: recent registrations, companies awaiting verification,
-  recently suspended, and companies dormant for over 60 days.
-- Company management: create a company with its employer in one step, change a
-  company's status (`pending` / `active` / `suspended`), or delete it entirely.
-- Account issues: employers who never signed in, suspended and disabled
-  accounts, companies with no employer, and failed invitation emails.
-- Platform health: live database ping with latency, email sender state, real
-  disk usage, and version/runtime information.
-- Two-way messaging with any company, by dashboard message or by email.
+**Employer (company workspace).** Employees, contracts (draft, send for
+signature, approve, terminate), attendance and shifts, leave requests and yearly
+allocations, company holidays, announcements, a company calendar, salaries,
+payroll and payslips, access control for rooms and doors, activity monitoring,
+and a reports roll-up.
 
-**Employer (company workspace)**
-
-- Employees, contracts (draft, send for signature, approve, terminate),
-  attendance and shifts, leave requests and yearly allocations, company
-  holidays, announcements, a company calendar, salaries, and payroll/payslips.
-- Reports roll-up for a chosen date.
-- Google Meet scheduling, and a conversation with the platform team.
-
-**Employee**
-
-- Own profile, attendance clock-in/out, leave requests, contract signing,
-  announcements and the company calendar.
+**Employee.** Own profile, attendance clock-in and clock-out, leave requests,
+contract signing, announcements, company calendar, payroll view, and door
+unlocking by QR scan where access has been granted.
 
 Employees reach the workspace only after their employer approves their signed
 contract. The super admin never sees a company's attendance, leave, payroll,
-contracts, salaries, holidays or announcements; those stay with the employer.
+contracts, salaries, holidays or announcements.
 
-## Technology stack
+## Requirements
 
-| Layer | Implementation |
-| --- | --- |
-| Frontend | React 19, React Router 7, Vite 8, plain CSS |
-| Backend | Django 5.2, Django REST Framework, Simple JWT |
-| Database | PostgreSQL, through the Django ORM and migrations |
-| API docs | drf-spectacular (Swagger UI and ReDoc, served by the backend) |
-| Django admin | Jazzmin |
-| Files | Private local storage by default, optional S3 via django-storages |
-| PDF | PDF.js in the browser for contract previews |
-| Server | Gunicorn with WhiteNoise for static files |
+Install these before you start:
 
-## Project structure
+- Python 3.12 is what deployment pins (`.python-version`). Local development is
+  currently running 3.10, and either works.
+- Node.js 20 or newer (this project has been run on v22).
+- PostgreSQL 14 or newer, running locally.
+- Git.
 
-```text
-employee_management/
-├── README.md
-├── .python-version                 # Pins 3.12 for deployment platforms
-├── backend/
-│   ├── manage.py
-│   ├── .env.example                # Copy to backend/.env
-│   ├── build.sh                    # Deployment build
-│   ├── start.sh                    # Deployment start (migrate, seed, then gunicorn)
-│   ├── backend/
-│   │   ├── settings.py             # Includes the drf-spectacular configuration
-│   │   ├── test_settings.py        # In-memory SQLite, for tests only
-│   │   ├── urls.py                 # All routes, including /api/docs/
-│   │   ├── health.py               # Public readiness probe
-│   │   └── requirements.txt
-│   ├── api/
-│   │   ├── models.py               # Business, AccountProfile, Employee, ...
-│   │   ├── views.py                # Employer workspace viewsets
-│   │   ├── accounts.py             # Auth, account, and /api/me/ endpoints
-│   │   ├── platform.py             # Super admin: companies, employers, employees
-│   │   ├── dashboard.py            # Super admin: overview and platform health
-│   │   ├── messaging.py            # Platform/company conversations
-│   │   ├── serializers.py
-│   │   ├── permissions.py          # IsManager, IsAdmin
-│   │   ├── onboarding.py           # Account provisioning and email
-│   │   ├── schema.py               # Documentation-only schema helpers
-│   │   ├── leave_management.py
-│   │   ├── contract_content.py
-│   │   ├── management/commands/    # bootstrap_admin, ensure_platform_admin, seed
-│   │   ├── migrations/
-│   │   └── test_*.py, tests.py
-│   └── private_media/              # Created on first upload; not public
-├── frontend/
-│   ├── package.json                # The frontend app lives here
-│   ├── .env.example                # Only needed for a built frontend
-│   ├── vite.config.js              # Dev proxy: /api -> 127.0.0.1:8000
-│   ├── vercel.json                 # SPA rewrites for client-side routing
-│   ├── scripts/copy-pdf-assets.mjs
-│   └── src/
-│       ├── App.jsx                 # Routes and site chrome
-│       ├── AccountPage.jsx         # Employee workspace
-│       ├── ManagerDashboard.jsx    # Employer workspace
-│       ├── CompanyCalendar.jsx
-│       ├── api.js                  # Every API call, with JWT refresh
-│       └── components/
-│           ├── AdminDashboard.jsx  # Super admin shell
-│           ├── PlatformOverview.jsx
-│           └── Conversation.jsx
-└── docs/
-    ├── API.md                      # Human-readable API guide
-    ├── DEPLOYMENT.md
-    ├── openapi.yaml                # Generated schema snapshot
-    └── openapi.json
-```
+Optional, only for the simulated door:
 
-Install frontend dependencies from `frontend/`. The root `package.json` is not
-the frontend application and holds none of its scripts.
+- Visual Studio Code with the PlatformIO IDE and Wokwi for VS Code extensions.
 
-## Prerequisites
+All commands below are PowerShell on Windows, which is the environment this
+project is developed in. On macOS or Linux the only differences are the virtual
+environment activation line and the path separators.
 
-| Tool | Version | Notes |
-| --- | --- | --- |
-| Python | 3.10 or newer | The checked-in virtual environment runs 3.10; `.python-version` asks deployment platforms for 3.12 |
-| Node.js | 20 or newer | Developed against Node 22 and npm 10 |
-| PostgreSQL | 13 or newer | Required. SQLite is used only by the test settings |
-| Git | any recent | |
+## 1. Clone the repository
 
-## Setup
-
-### 1. Clone the repository
-
-```bash
+```powershell
 git clone <your-repository-url> employee_management
 cd employee_management
 ```
 
-### 2. Create and activate a virtual environment
+Everything that follows assumes you are in that `employee_management` folder.
 
-**Windows (PowerShell)**
+## 2. Create the virtual environment
+
+The virtual environment lives at the repository root, in a folder named `env`.
+Several scripts and docs assume that name and location.
 
 ```powershell
 py -3 -m venv env
@@ -157,7 +89,7 @@ py -3 -m venv env
 python -m pip install --upgrade pip
 ```
 
-**macOS / Linux**
+On macOS or Linux:
 
 ```bash
 python3 -m venv env
@@ -165,404 +97,339 @@ source env/bin/activate
 python -m pip install --upgrade pip
 ```
 
-Activation is optional. Every command below can instead be run against the
-environment's interpreter directly, which is useful in scripts:
-`.\env\Scripts\python.exe` on Windows, `./env/bin/python` elsewhere.
-
-### 3. Install backend dependencies
-
-Note the doubled `backend` in the path: the requirements file lives inside the
-Django project package.
-
-```bash
-python -m pip install -r backend/backend/requirements.txt
-```
-
-### 4. Create the PostgreSQL database
-
-Connect as a PostgreSQL administrator:
-
-```bash
-psql -h 127.0.0.1 -U postgres -d postgres
-```
-
-Run this once for a new installation, choosing your own password:
-
-```sql
-CREATE USER employee_app WITH PASSWORD 'replace-with-your-local-password';
-CREATE DATABASE employee_management OWNER employee_app;
-```
-
-The application role owns the database so Django can create and alter its
-tables. It does not need superuser rights. Leave `psql` with `\q`.
-
-If `psql` is not on PATH, run the same SQL from pgAdmin's Query Tool against the
-`postgres` database. `CREATE DATABASE` must run outside a transaction.
-
-### 5. Configure environment variables
-
-The backend reads `backend/.env` (loaded by `python-dotenv` from the `backend/`
-directory). Copy the example only if the file does not already exist:
-
-**Windows (PowerShell)**
+If PowerShell refuses to run the activation script, allow local scripts once:
 
 ```powershell
-if (-not (Test-Path .\backend\.env)) { Copy-Item .\backend\.env.example .\backend\.env }
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 ```
 
-**macOS / Linux**
+## 3. Install backend dependencies
 
-```bash
-test -f backend/.env || cp backend/.env.example backend/.env
+Note the path: the requirements file sits inside the inner `backend` package,
+not at the top of the `backend` folder.
+
+```powershell
+python -m pip install -r backend\backend\requirements.txt
 ```
 
-Then edit `backend/.env`:
+That installs Django 5.2, Django REST Framework, SimpleJWT, drf-spectacular,
+psycopg2-binary, Pillow, whitenoise, gunicorn, django-storages and the rest.
 
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `DB_NAME` | yes | PostgreSQL database name |
-| `DB_USER` | yes | Application database role |
-| `DB_PASSWORD` | yes | Password for that role |
-| `DB_HOST` | yes | PostgreSQL host, commonly `127.0.0.1` |
-| `DB_PORT` | yes | PostgreSQL port, commonly `5432` |
-| `DATABASE_URL` | no | A single connection URL. When set, it replaces all five `DB_*` values |
-| `SECRET_KEY` | only when `DEBUG=false` | Django signing key. Startup fails without it in production |
-| `DEBUG` | no | Defaults to `true` locally and `false` on Render |
-| `FRONTEND_URL` | no | Where invitation emails send people. Defaults to `http://localhost:5173` in development |
-| `ALLOWED_HOSTS` | no | Comma-separated. Defaults to localhost |
-| `CORS_ALLOWED_ORIGINS` | no | Comma-separated extra browser origins |
-| `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USE_TLS`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `DEFAULT_FROM_EMAIL` | no | Server-wide invitation sender. Leave blank to let each employer add a Gmail App Password under Settings |
-| `MEDIA_ROOT` | no | Where uploads are stored. Defaults to `backend/private_media` |
-| `STORAGE_BACKEND` | no | `filesystem` (default) or `s3` |
-| `PLATFORM_ADMIN_PASSWORD` | no | Used only by `ensure_platform_admin` / `seed` to create the platform super admin. See step 7 |
+## 4. Create the PostgreSQL database
 
-`backend/.env` is ignored by Git. Real process environment variables take
-precedence over the file.
+Create a database and a user that owns it. Using `psql` as the postgres
+superuser:
 
-### 6. Run the migrations
-
-```bash
-python backend/manage.py migrate
-python backend/manage.py check
+```sql
+CREATE DATABASE employee_management;
+CREATE USER employee_app WITH PASSWORD 'choose-a-local-password';
+GRANT ALL PRIVILEGES ON DATABASE employee_management TO employee_app;
+ALTER DATABASE employee_management OWNER TO employee_app;
 ```
 
-Migrations create every table. There are no seeded accounts or demo records. An
-existing `backend/db.sqlite3` file is not used by the normal configuration.
+If you intend to run the test suite against PostgreSQL rather than the bundled
+SQLite test settings, also grant the ability to create databases:
 
-### 7. Create an administrator account
-
-There are two different things called "admin", and they are not the same:
-
-**A Django admin user**, for the Django admin site at `/admin/`:
-
-```bash
-python backend/manage.py createsuperuser
+```sql
+ALTER USER employee_app CREATEDB;
 ```
 
-**A platform super admin**, for the `/api/admin/...` endpoints and the super
-admin dashboard. This requires an `AccountProfile` with `role="admin"`, which
-`createsuperuser` does not create. Either create the profile from the Django
-admin site, or create the platform super admin with the bundled command. Its
-username is `admin` and its email is `ndinayoeric1@gmail.com`; both are fixed in
-`backend/api/management/commands/ensure_platform_admin.py`. The password comes
-only from the `PLATFORM_ADMIN_PASSWORD` environment variable (in `backend/.env`
-or the process environment) and must pass Django's password validation:
+## 5. Configure backend/.env
 
-```bash
-python backend/manage.py ensure_platform_admin
+Copy the template and edit it. This file is git-ignored and must never be
+committed.
+
+```powershell
+Copy-Item backend\.env.example backend\.env
 ```
 
-The command never creates a second account for this identity. It uses the
-account named `admin` if there is one, otherwise the account with that email
-(preferring one that is already a platform admin):
-
-- **No such account:** it creates a superuser with a platform admin profile.
-  `PLATFORM_ADMIN_PASSWORD` is required.
-- **Already a platform admin:** its username and email are set to the values
-  above. Its password is never changed.
-- **Exists but is not a platform admin** (for example a superuser made by
-  `bootstrap_admin` or `createsuperuser`): it is promoted once. It gets the
-  platform admin role and becomes an active staff superuser with the username
-  and email above. If `PLATFORM_ADMIN_PASSWORD` is set, that becomes its
-  password at this moment only; otherwise its password is kept.
-- **A profile still linked to a company or an employee record:** the command
-  refuses without changing anything, because promoting it would detach that
-  record.
-
-No account is ever deleted. `start.sh` runs this on every deployment through
-`seed`. Remove `PLATFORM_ADMIN_PASSWORD` from the environment once the account
-exists, and never commit its real value.
-
-A third command, `bootstrap_admin`, creates a Django superuser from
-`DJANGO_SUPERUSER_USERNAME`, `DJANGO_SUPERUSER_PASSWORD` and
-`DJANGO_SUPERUSER_EMAIL` if they are set. It never changes an existing account
-and is what `start.sh` runs during deployment. That superuser has no platform
-admin profile, so it cannot use `/api/admin/...` until `seed` promotes it (only
-if it is named `admin` or uses the email above).
-
-#### Seeding a new deployment
-
-`seed` initialises everything a fresh database needs and is safe to run any
-number of times. It never creates duplicates or changes a password:
-
-```bash
-python backend/manage.py migrate
-python backend/manage.py seed
-```
-
-It ensures the `Managers` group exists, then runs `ensure_platform_admin` as
-described above.
-
-#### One account per email
-
-Sign-in emails are unique, compared case-insensitively; blank emails are
-exempt. Signup, employer creation, employee invitations, `bootstrap_admin` and
-`ensure_platform_admin` all refuse or skip an email that another account
-already uses. A unique database index on `LOWER(email)` enforces it as well.
-Older databases may still contain accounts that share an email. Those are
-never merged or deleted automatically: migration `0029` skips the index while
-they exist, and `start.sh` runs this read-only report on every deploy:
-
-```bash
-python backend/manage.py check_duplicate_emails
-```
-
-It lists each conflicting account (id, username, role, business or employee
-link, status, dates) in the logs. Once none remain, it adds the index. Until
-then, sign-in with a shared email still works whenever the password identifies a
-single account; otherwise sign in with the username. Account roles (`employee`, `employer`,
-`admin`) are built into the code and need no seeding.
-
-### 8. Install frontend dependencies
-
-```bash
-cd frontend
-npm ci
-cd ..
-```
-
-No frontend environment file is needed for development: Vite proxies `/api` to
-`http://127.0.0.1:8000` (see `frontend/vite.config.js`). Only a **built**
-frontend pointed at another backend needs one. In that case copy
-`frontend/.env.example` to `frontend/.env.local` and set the backend origin
-without a trailing `/api`:
+The values that matter for a first run:
 
 ```dotenv
-VITE_API_URL=http://127.0.0.1:8000
+DB_NAME=employee_management
+DB_USER=employee_app
+DB_PASSWORD=the-password-you-chose
+DB_HOST=127.0.0.1
+DB_PORT=5432
+
+FRONTEND_URL=http://localhost:5173
 ```
 
-This is read at build time, so rebuild after changing it. Vite exposes every
-`VITE_` variable to the browser, so never put a secret in one.
+Notes on the rest of the file:
 
-## Running locally
+- `DEBUG` defaults to true locally, so you do not need to set it. Set
+  `DEBUG=false` only with a real `SECRET_KEY`, or startup will refuse to run.
+- `ALLOWED_HOSTS` defaults to `localhost,127.0.0.1,[::1]`. Add
+  `host.wokwi.internal` to it if you are using the Wokwi door, otherwise the
+  ESP32 is answered with a 400 page instead of JSON.
+- Email is optional. Leave `EMAIL_HOST` and `BREVO_API_KEY` blank and invitation
+  emails are simply not sent. Set `BREVO_API_KEY` to send over HTTPS instead of
+  SMTP, which helps on hosts that block outbound SMTP.
+- `DATABASE_URL` overrides the five `DB_*` values if you prefer a single
+  connection string.
 
-Two terminals.
+The frontend has its own `frontend/.env.example`, but you do not need it for
+development. The dev server proxies `/api` to `http://127.0.0.1:8000` through
+`frontend/vite.config.js`. Copy it to `frontend/.env` and set `VITE_API_URL`
+only when you build or preview the frontend as static assets.
 
-**Terminal 1, backend** (from the project root):
+## 6. Migrate and create the admin
 
-```bash
-python backend/manage.py runserver
+```powershell
+cd backend
+python manage.py migrate
 ```
 
-**Terminal 2, frontend**:
+Then create the platform super admin. `seed` is idempotent and also creates the
+Managers group, so it is safe to re-run.
 
-```bash
+```powershell
+$env:PLATFORM_ADMIN_PASSWORD='choose-a-strong-password'
+python manage.py seed
+Remove-Item Env:PLATFORM_ADMIN_PASSWORD
+```
+
+That gives you an account with username `admin`. You can also set
+`PLATFORM_ADMIN_PASSWORD` in `backend/.env` instead, but remove it once the
+account exists.
+
+## 7. Install frontend dependencies
+
+In a second terminal, from the repository root:
+
+```powershell
 cd frontend
-npm run dev
+npm install
 ```
 
-| Service | URL |
-| --- | --- |
-| Frontend | <http://localhost:5173/> |
-| Backend API | <http://127.0.0.1:8000/api/> |
-| Swagger UI | <http://127.0.0.1:8000/api/docs/> |
-| ReDoc | <http://127.0.0.1:8000/api/redoc/> |
-| Django admin | <http://127.0.0.1:8000/admin/> |
-| Health probe | <http://127.0.0.1:8000/api/health/> |
+## 8. Run the project
 
-`npm run dev` first runs `copy-pdf-assets.mjs`, which copies the PDF.js worker
-into `frontend/public`. Contract previews need it.
+Two terminals, both left running.
 
-## Roles and accounts
+Backend (from `backend`, with the virtual environment active):
 
-Authentication is **JWT bearer tokens**. `POST /api/token/` accepts a username
-or an email address and returns `access` (30 minutes) and `refresh` (1 day).
-Send `Authorization: Bearer <access>` on every protected request;
-`frontend/src/api.js` refreshes the token automatically.
+```powershell
+python manage.py runserver 0.0.0.0:8000
+```
 
-Every account has exactly one role on its `AccountProfile`. The roles do not
-overlap: an admin token is rejected by employer endpoints and vice versa.
+Frontend (from `frontend`):
 
-| Role | Represents | Reaches |
-| --- | --- | --- |
-| `admin` | The platform owner, who runs the whole deployment | `/api/admin/...` and the super admin dashboard at `/admin` in the frontend |
-| `employer` | One company, which owns its own workspace | The employer workspace endpoints and `/api/messages/` |
-| `employee` | One person employed by a company | Only `/api/me/...`, and only after their employer approves their signed contract |
+```powershell
+npm run dev -- --host 0.0.0.0
+```
 
-Employer data is scoped to that employer's own business. A record belonging to
-another business returns `404`, never `403`.
+Then open:
 
-A company also has a status of its own, changed only by the super admin:
+- App: http://localhost:5173/
+- API root: http://localhost:8000/api/
+- Health check: http://localhost:8000/api/health/
+- Django admin: http://localhost:8000/admin/
+- API docs: http://localhost:8000/api/docs/
 
-| Status | Meaning |
-| --- | --- |
-| `pending` | Signed itself up and is not verified yet. A queue for the admin; the workspace stays open |
-| `active` | Verified and running |
-| `suspended` | The company's employer sign-ins are deactivated. Nothing is deleted |
+`--host 0.0.0.0` on both makes the app reachable from a phone on the same
+network, which you need for scanning door QR codes. Use the Network URL that
+Vite prints, for example `http://10.0.0.5:5173/`.
 
-Employers who sign up through the public form arrive as `pending`. Companies the
-super admin creates are `active` immediately.
+Sign in as `admin` to reach the platform dashboard, create a company and its
+employer, then sign in as that employer to build out employees, contracts and
+rooms.
+
+## Roles
+
+| Role | Reaches | Created by |
+|---|---|---|
+| Super admin | Platform dashboard, companies, employers, platform messaging | `python manage.py seed` |
+| Employer | One company workspace and everything inside it | Super admin, when creating a company |
+| Employee | Own records only, after contract approval | Employer, by invitation |
 
 ## API documentation
 
-The full reference is generated from the code by drf-spectacular, so it cannot
-drift from the implementation.
+The schema is generated from the live views and serializers by
+drf-spectacular, so it stays in step with the code.
 
-| What | Path | Local URL |
-| --- | --- | --- |
-| Swagger UI | `/api/docs/` | <http://127.0.0.1:8000/api/docs/> |
-| ReDoc | `/api/redoc/` | <http://127.0.0.1:8000/api/redoc/> |
-| OpenAPI YAML | `/api/schema/` | <http://127.0.0.1:8000/api/schema/> |
-| OpenAPI JSON | `/api/schema/?format=json` | <http://127.0.0.1:8000/api/schema/?format=json> |
+- Swagger UI: http://localhost:8000/api/docs/
+- ReDoc: http://localhost:8000/api/redoc/
+- Raw schema: http://localhost:8000/api/schema/
+- Written guide: `docs/API.md`
 
-The same paths work on a deployed backend, for example
-`https://your-backend-host/api/docs/`. No host is baked into the schema: Swagger
-UI loads `/api/schema/` relatively, so one build serves every environment.
+To call protected endpoints from Swagger, POST your credentials to
+`/api/token/`, copy the `access` token, and paste it into Authorize as
+`Bearer <token>`.
 
-[docs/API.md](docs/API.md) is the human-readable guide: authentication,
-roles and permissions, error codes, request examples, and the complete endpoint
-list grouped by feature. Snapshots of the schema are checked in as
-[docs/openapi.yaml](docs/openapi.yaml) and [docs/openapi.json](docs/openapi.json).
+## Tests
 
-### Testing the API from Swagger
+The default test runner needs permission to create a PostgreSQL database. If
+your database user does not have `CREATEDB`, use the bundled test settings,
+which run against in-memory SQLite instead:
 
-1. Open <http://127.0.0.1:8000/api/docs/>.
-2. Expand **Authentication**, then **POST /api/token/**, press **Try it out**,
-   send your username and password, and copy the `access` value.
-3. Press **Authorize** at the top of the page and paste the token into
-   `jwtAuth`.
-4. Any protected operation now sends the header for you. Authorization survives
-   a page reload.
-
-Regenerate the checked-in schema after changing any view, serializer or route,
-from `backend/`:
-
-```bash
-python manage.py spectacular --validate --fail-on-warn --file ../docs/openapi.yaml
-python manage.py spectacular --validate --fail-on-warn --format openapi-json --file ../docs/openapi.json
+```powershell
+python manage.py test --settings=backend.test_settings
 ```
 
-## Tests and checks
+Otherwise:
 
-Backend, from the project root:
-
-```bash
-python backend/manage.py check
-python backend/manage.py showmigrations api
-python backend/manage.py test api --settings=backend.test_settings --noinput
+```powershell
+python manage.py test
 ```
 
-`backend.test_settings` uses an isolated in-memory SQLite database and a fast
-test-only password hasher, so PostgreSQL need not be running. It still imports
-the base settings, so supply `SECRET_KEY` when `DEBUG=false`, plus either
-`DATABASE_URL` or the five `DB_*` variables. Never run the application itself
-with `backend.test_settings`.
+Frontend linting:
 
-Running the tests without `--settings=backend.test_settings` uses PostgreSQL and
-needs a role allowed to create a test database, which the application role does
-not have by default.
-
-Frontend, from `frontend/`:
-
-```bash
-npm run lint
-npm run build
-```
-
-## Building
-
-```bash
+```powershell
 cd frontend
-npm run build      # Outputs to frontend/dist
-npm run preview    # Serves the build locally
+npm run lint
 ```
 
-The backend collects its own static files for deployment:
+## Wokwi ESP32 door
 
-```bash
-python backend/manage.py collectstatic --noinput
+This is optional. It simulates a maglock on an ESP32 so a QR scan from an
+employee's phone physically unlocks a door in the simulation. Django authorizes
+the scan and queues a one-use command; the ESP32 only polls for commands that
+are already authorized, and signs every request with HMAC-SHA256.
+
+Full detail is in `docs/WOKWI_DOOR.md`. The short path:
+
+**1. Add the door settings to `backend/.env`.**
+
+```dotenv
+ALLOWED_HOSTS=localhost,127.0.0.1,host.wokwi.internal
+DOOR_GATEWAY=api.wokwi_gateway.WokwiPollingGateway
+DOOR_COMMAND_TTL_SECONDS=8
+DOOR_DEVICE_OFFLINE_SECONDS=10
+DOOR_SIGNATURE_WINDOW_SECONDS=60
 ```
 
-## Deployment
+Both of the first two are required. Without `ALLOWED_HOSTS` the ESP32 receives a
+Django error page rather than JSON, and without `DOOR_GATEWAY` no unlock command
+is ever queued. Restart Django after editing `.env`, because it is read only at
+startup.
 
-Based on the configuration committed to this repository.
+**2. Create the room in the app**, under Access Control, and note its door
+identifier (for example `Door 1`).
 
-**Backend (Render).** `backend/build.sh` installs requirements and runs
-`collectstatic`. `backend/start.sh` runs `migrate`, then `seed`, then
-`bootstrap_admin`, then Gunicorn on `$PORT`. Render settings, taken from
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md):
+**3. Enroll the device.** The first argument is the room's door identifier, not
+the device id. The device id is the `--device-id` option. Getting these the
+wrong way round fails with `door_identifier must match exactly one room`.
 
-| Setting | Value |
-| --- | --- |
-| Root directory | `backend` |
-| Build command | `bash build.sh` |
-| Start command | `bash start.sh` |
-| Health check path | `/api/health/` |
+```powershell
+$env:WOKWI_DEVICE_SECRET='a-long-random-local-secret'
+python manage.py enroll_door_device "Door 1" --device-id "door-101"
+Remove-Item Env:WOKWI_DEVICE_SECRET
+```
 
-Set at minimum `SECRET_KEY`, `DATABASE_URL`, `FRONTEND_URL` and
-`CORS_ALLOWED_ORIGINS`. `DEBUG` defaults to `false` on Render, which also
-contributes its own hostname to `ALLOWED_HOSTS`. `FRONTEND_URL` must be the
-exact frontend origin with no path; it is added to CORS and trusted CSRF
-origins.
+If you leave `WOKWI_DEVICE_SECRET` unset, the command generates a secret and
+prints it once. Only the SHA-256 derivation is stored, so a lost secret means
+re-enrolling.
 
-To create the platform super admin, add `PLATFORM_ADMIN_PASSWORD` and deploy.
-`start.sh` runs `python manage.py seed` on every start (see "Seeding a new
-deployment" above); it is idempotent, so repeated starts change nothing. If
-seeding fails, the error and a warning appear in the deploy logs and the server
-still starts. Remove `PLATFORM_ADMIN_PASSWORD` once the logs show the account
-was created.
+**4. Create `wokwi/secrets.h`** from the example and paste in the same device id
+and secret. The file is git-ignored and must stay that way.
 
-**Frontend (Vercel).** `frontend/vercel.json` sets the build command, output
-directory, and the SPA rewrite that serves `index.html` for client-side routes
-such as `/dashboard/employees` and `/admin/companies`. Build with the intended
-`VITE_API_URL`.
+```powershell
+Copy-Item wokwi\secrets.h.example wokwi\secrets.h
+```
 
-Keep `private_media` on persistent, non-public storage, or set
-`STORAGE_BACKEND=s3`. Plan backups for both PostgreSQL and uploaded files.
-Django's `runserver` and Vite's dev and preview servers are development tools
-only.
+**5. Build the firmware.** PlatformIO Core ships inside the PlatformIO IDE
+extension but is not always on PATH. If `pio` is not recognised, either restart
+VS Code completely so it picks up the PATH entry the extension added, or prefix
+it for the current session:
+
+```powershell
+$env:Path = "$env:USERPROFILE\.platformio\penv\Scripts;$env:Path"
+cd wokwi
+pio run
+```
+
+**6. Start the simulation** with Wokwi for VS Code, which includes the private
+gateway that makes `host.wokwi.internal` resolve. Wait for
+`ESP32 online; maglock LED ON (locked)` in the serial monitor. The public Wokwi
+gateway cannot reach a service on your own machine.
+
+**7. Test it.** Sign in as the employer, open Access Control, start the Door
+Simulator for that room, and confirm the page shows the controller online and
+locked. On a phone, sign in as an employee who has a grant for that room, choose
+the room, and scan the rotating QR code on the employer screen. The LED turns
+off for five seconds and the page reports the unlock, then it relocks.
+
+## Project layout
+
+```
+employee_management/
+├── README.md
+├── .python-version                 # Pins 3.12 for deployment platforms
+├── backend/
+│   ├── manage.py
+│   ├── .env.example                # Copy to backend/.env
+│   ├── build.sh                    # Deployment build
+│   ├── start.sh                    # Deployment start (migrate, seed, gunicorn)
+│   ├── backend/
+│   │   ├── settings.py
+│   │   ├── test_settings.py        # In-memory SQLite, for tests only
+│   │   ├── urls.py                 # All routes, including /api/docs/
+│   │   ├── health.py               # Public readiness probe
+│   │   └── requirements.txt        # Backend dependencies live here
+│   └── api/
+│       ├── models.py
+│       ├── views.py                # Employer workspace viewsets
+│       ├── accounts.py             # Auth, account, and /api/me/ endpoints
+│       ├── platform.py             # Super admin company management
+│       ├── dashboard.py            # Super admin overview and health
+│       ├── access_control.py       # Rooms, grants, unlock requests
+│       ├── door_device.py          # Signed ESP32 poll and acknowledge endpoints
+│       ├── door_hardware.py        # Gateway interface and resolution
+│       ├── wokwi_gateway.py        # Polling gateway for the ESP32
+│       ├── door_simulator.py       # Rotating QR proximity simulator
+│       ├── payroll_views.py        # Payroll and payslips
+│       ├── management/commands/    # seed, enroll_door_device, and others
+│       └── migrations/
+├── frontend/
+│   ├── package.json
+│   ├── vite.config.js              # Dev proxy: /api -> 127.0.0.1:8000
+│   └── src/
+│       ├── App.jsx
+│       ├── AccountPage.jsx         # Employee workspace
+│       ├── ManagerDashboard.jsx    # Employer workspace
+│       ├── AccessControl.jsx       # Rooms, doors, simulator
+│       └── api.js                  # Every API call, with JWT refresh
+├── wokwi/
+│   ├── sketch.ino                  # ESP32 firmware
+│   ├── platformio.ini
+│   ├── diagram.json                # Wokwi wiring
+│   └── secrets.h.example           # Copy to secrets.h (git-ignored)
+└── docs/
+    ├── API.md
+    ├── DEPLOYMENT.md
+    └── WOKWI_DOOR.md
+```
 
 ## Troubleshooting
 
-**`django.db.utils.OperationalError` on any command.** PostgreSQL is not
-running, or `backend/.env` has the wrong host, port, user or password. Confirm
-with `psql -h 127.0.0.1 -U employee_app -d employee_management`.
+**`manage.py` cannot connect to the database.** Confirm PostgreSQL is running
+and that the five `DB_*` values in `backend/.env` match the database and user
+you created. A missing `backend/.env` produces a `KeyError` on `DB_NAME`,
+because those settings are read with `os.environ[...]` and have no defaults.
 
-**`ImproperlyConfigured: Set SECRET_KEY before starting with DEBUG=false`.** Set
-`SECRET_KEY` in the environment, or leave `DEBUG=true` for local development.
+**Changes to `.env` seem ignored.** The file is read once at startup and the
+autoreloader does not watch it. Stop the server and start it again.
 
-**`ModuleNotFoundError: No module named 'dj_database_url'`.** The system Python
-is being used instead of the virtual environment. Activate it, or call
-`./env/bin/python` (or `.\env\Scripts\python.exe`) explicitly.
+**The Wokwi terminal prints HTML instead of status lines.** `host.wokwi.internal`
+is missing from `ALLOWED_HOSTS`, so Django is returning its debug error page and
+the firmware prints the body. Add it and restart Django.
 
-**`relation "api_..." does not exist`, or a 500 from a new feature.** A
-migration has not been applied. Run `python backend/manage.py showmigrations api`
-and then `python backend/manage.py migrate`.
+**The door shows offline even though Wokwi is running.** Every poll is failing
+authentication, so `last_seen_at` never updates. The usual cause is clock drift:
+the simulated ESP32 clock falls behind real time until the signed timestamp
+falls outside `DOOR_SIGNATURE_WINDOW_SECONDS`. Restart the simulation to resync
+its clock, or widen that window.
 
-**Signed in as the super admin but there is no dashboard.** The account has no
-`AccountProfile` with `role="admin"`. See
-[Create an administrator account](#7-create-an-administrator-account).
+**Scanning returns 502.** That is the application's own response, not a server
+failure. `RoomUnlockView` returns 502 when the door controller cannot be
+reached, which means the device is offline. Access is still recorded as granted
+with a failed unlock.
 
-**Invitation emails never arrive.** No sender is configured. Check
-`GET /api/admin/health/`, or the Platform health panel on the super admin
-dashboard, which reports the email service state. Either set the `EMAIL_*`
-variables or add a Gmail App Password under the employer's Settings page.
+**`pio` is not recognised.** PlatformIO Core is installed with the IDE extension
+at `%USERPROFILE%\.platformio\penv\Scripts`, but an already-open terminal holds
+the PATH from before the extension was installed. Restart VS Code fully, or
+prepend that folder for the session.
 
-**Frontend loads but every request fails with CORS or 401.** The backend is not
-running on `http://127.0.0.1:8000`, or a built frontend has the wrong
-`VITE_API_URL`. In development the Vite proxy in `frontend/vite.config.js`
-handles this; change `server.proxy` if your backend uses another address.
-
-**A deep link such as `/admin/companies` 404s in production.** The host is not
-rewriting unknown paths to `index.html`. `frontend/vercel.json` already does
-this; any other host needs the same rule.
+**Port 8000 is already in use.** Check for an older `runserver` still holding
+it. Running two Django servers on the same port makes which one answers a given
+request unpredictable on Windows.

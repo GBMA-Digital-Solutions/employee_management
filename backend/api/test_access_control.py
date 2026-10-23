@@ -60,6 +60,11 @@ class AccessControlTests(APITestCase):
         if approved:
             Contract.objects.create(employee=employee, title="Employment", start_date=date(2026, 1, 1),
                                     signature_status="signed", worker_approval_status="approved")
+            # Approving a signed contract is what promotes a new hire to an
+            # active worker, so mirror that here instead of leaving the fixture
+            # in the inactive state a brand-new Employee now starts in.
+            employee.is_active = True
+            employee.save(update_fields=["is_active"])
         return employee, user
 
     def as_user(self, user):
@@ -253,6 +258,29 @@ class AccessControlTests(APITestCase):
             ("boss@example.com", "granted", "", "failed"),
         ])
 
+    def test_leaving_is_recorded_even_when_the_door_is_offline(self):
+        """An offline door must not trap someone inside with no way to clock out."""
+        self.room.is_check_in_door = True
+        self.room.save(update_fields=["is_check_in_door"])
+        RoomAccessGrant.objects.create(room=self.room, employee=self.aline)
+        self.aline.is_active = True
+        self.aline.save(update_fields=["is_active"])
+        self.as_user(self.aline_user)
+        with override_settings(DOOR_GATEWAY=FAKE_GATEWAY):
+            self.assertEqual(self.unlock(self.room, "tag-door-101", "scan_in").status_code, 200)
+
+        # The door goes offline. Going out is still recorded, without an unlock.
+        leaving = self.unlock(self.room, attendance_action="scan_out")
+        self.assertEqual(leaving.status_code, 200, leaving.data)
+        self.assertEqual(leaving.data["attendance"], "scan_out")
+        self.assertEqual(leaving.data["unlock_status"], "failed")
+        self.assertFalse(AttendanceVisit.objects.filter(
+            attendance__employee=self.aline, check_out_at__isnull=True).exists())
+
+        # Coming back in still needs a door that can actually open.
+        blocked = self.unlock(self.room, attendance_action="scan_in")
+        self.assertEqual(blocked.status_code, 503, blocked.data)
+
     @override_settings(DOOR_GATEWAY=FAKE_GATEWAY)
     def test_check_in_door_separates_workday_checks_from_temporary_scans(self):
         self.room.is_check_in_door = True
@@ -335,6 +363,10 @@ class AccessControlTests(APITestCase):
         self.assertEqual(self.unlock(self.room, proof="tag-door-101").status_code, 403)
 
         newcomer, newcomer_user = self.hire(self.business, "new@example.com", approved=False)
+        # Active but with no approved contract, which is the state a worker is
+        # left in when approval is revoked. Without this the inactive check
+        # short-circuits first and the contract rule below is never exercised.
+        Employee.objects.filter(pk=newcomer.pk).update(is_active=True)
         RoomAccessGrant.objects.create(room=self.room, employee=newcomer)
         self.as_user(newcomer_user)
         self.assertEqual(self.unlock(self.room, proof="tag-door-101").status_code, 403)

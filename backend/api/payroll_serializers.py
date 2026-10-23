@@ -38,7 +38,7 @@ def file_name(field):
 class PayrollPolicySerializer(serializers.ModelSerializer):
     class Meta:
         model = PayrollPolicy
-        fields = ["advance_deduction_limit_percent", "updated_at"]
+        fields = ["advance_deduction_limit_percent", "advance_charge_percent", "updated_at"]
         read_only_fields = ["updated_at"]
 
 
@@ -115,6 +115,9 @@ class SalaryAdvanceSerializer(ManagerRecordSerializer):
     schedule = serializers.SerializerMethodField()
     from_request = serializers.SerializerMethodField()
 
+    def repayment_total(self, obj):
+        return obj.total_repayment or obj.amount
+
     @extend_schema_field(serializers.BooleanField(help_text=(
         "Approved from the employee's own request. Such an advance is locked.")))
     def get_from_request(self, obj):
@@ -149,7 +152,7 @@ class SalaryAdvanceSerializer(ManagerRecordSerializer):
     @extend_schema_field(serializers.ListField(child=serializers.DictField()))
     def get_schedule(self, obj):
         """The planned monthly installments, from the first repayment month."""
-        rows, left = [], obj.amount
+        rows, left = [], self.repayment_total(obj)
         year, month = obj.first_repayment_month.year, obj.first_repayment_month.month
         while left > 0 and len(rows) < 120:
             amount = min(obj.installment_amount, left)
@@ -193,8 +196,9 @@ class SalaryAdvanceSerializer(ManagerRecordSerializer):
             raise serializers.ValidationError({"amount": "The advance amount must be greater than zero."})
         if installment is not None and installment <= 0:
             raise serializers.ValidationError({"installment_amount": "The monthly installment must be greater than zero."})
-        if amount and installment and installment > amount:
-            raise serializers.ValidationError({"installment_amount": "The monthly installment cannot exceed the advance amount."})
+        total_repayment = self.repayment_total(instance) if instance else amount
+        if amount and installment and installment > total_repayment:
+            raise serializers.ValidationError({"installment_amount": "The monthly installment cannot exceed the total repayment."})
         if issue_date and first_month and first_month < issue_date.replace(day=1):
             raise serializers.ValidationError({"first_repayment_month": "Repayment cannot start before the month the advance is issued."})
         employee = self.value(attrs, "employee")
@@ -207,12 +211,14 @@ class SalaryAdvanceSerializer(ManagerRecordSerializer):
 
     class Meta:
         model = SalaryAdvance
-        fields = ["id", "employee", "employee_name", "amount", "currency", "issue_date", "reason",
+        fields = ["id", "employee", "employee_name", "amount", "charge_percent", "charge_amount",
+                  "total_repayment", "currency", "issue_date", "reason",
                   "installment_amount", "first_repayment_month", "notes", "disbursed_on",
                   "disbursement_method", "disbursement_reference", "approved_by", "created_at", "status",
                   "total_repaid", "scheduled_deductions", "outstanding_balance", "next_installment",
                   "schedule", "repayments", "from_request"]
-        read_only_fields = ["disbursed_on", "disbursement_method", "disbursement_reference", "approved_by",
+        read_only_fields = ["charge_percent", "charge_amount", "total_repayment", "disbursed_on",
+                            "disbursement_method", "disbursement_reference", "approved_by",
                             "created_at"]
         extra_kwargs = {"installment_amount": {"required": False}, "first_repayment_month": {"required": False},
                         "reason": {"allow_blank": True, "default": ""}}
@@ -223,7 +229,8 @@ class AdvanceRequestSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SalaryAdvanceRequest
-        fields = ["id", "employee", "employee_name", "amount", "currency", "reason", "status", "decision_notes",
+        fields = ["id", "employee", "employee_name", "amount", "charge_percent", "charge_amount",
+                  "total_repayment", "currency", "reason", "status", "decision_notes",
                   "decided_by", "decided_at", "advance", "requested_at"]
         read_only_fields = fields
 
@@ -240,9 +247,11 @@ class MyAdvanceRequestSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SalaryAdvanceRequest
-        fields = ["id", "amount", "currency", "reason", "status", "decision_notes", "decided_by", "decided_at",
+        fields = ["id", "amount", "charge_percent", "charge_amount", "total_repayment", "currency", "reason",
+                  "status", "decision_notes", "decided_by", "decided_at",
                   "advance", "requested_at"]
-        read_only_fields = ["currency", "status", "decision_notes", "decided_by", "decided_at", "advance",
+        read_only_fields = ["charge_percent", "charge_amount", "total_repayment", "currency", "status",
+                            "decision_notes", "decided_by", "decided_at", "advance",
                             "requested_at"]
         extra_kwargs = {"reason": {"required": False, "allow_blank": True}}
 

@@ -10,6 +10,12 @@ from django.db.models.signals import pre_save
 from django.dispatch import receiver
 
 
+# Supporting files are not only PDFs: spreadsheets, slides, scans and plain
+# text all get attached to a contract in practice.
+DOCUMENT_EXTENSIONS = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+                       "txt", "rtf", "odt", "ods", "csv", "jpg", "jpeg", "png", "webp"]
+
+
 def contract_path(instance, filename):
     return f"contracts/{uuid4().hex}{Path(filename).suffix.lower()}"
 
@@ -52,7 +58,7 @@ class Business(models.Model):
     email_host_password = models.CharField(max_length=200, blank=True)
     expected_daily_hours = models.DecimalField(
         max_digits=4, decimal_places=2, default=Decimal("8.00"),
-        validators=[MinValueValidator(Decimal("0.25")), MaxValueValidator(Decimal("24.00"))],
+        validators=[MinValueValidator(Decimal("0.01")), MaxValueValidator(Decimal("24.00"))],
     )
     workday_start = models.TimeField(null=True, blank=True)
     workday_end = models.TimeField(null=True, blank=True)
@@ -126,7 +132,10 @@ class Employee(models.Model):
         ("contract", "Contract"), ("intern", "Intern")])
     photo = models.ImageField(upload_to=photo_path, blank=True,
         validators=[FileExtensionValidator(["jpg", "jpeg", "png", "webp"])])
-    is_active = models.BooleanField(default=True)
+    # A new hire is not an active worker until an employer approves their
+    # signed contract.  The approve-worker action is the only manager workflow
+    # that promotes this flag to True.
+    is_active = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -156,7 +165,7 @@ class Contract(models.Model):
     salary_currency = models.CharField(max_length=3, default="RWF")
     content = models.TextField(blank=True)
     document = models.FileField(upload_to=contract_path, blank=True,
-        validators=[FileExtensionValidator(["pdf", "doc", "docx"])])
+        validators=[FileExtensionValidator(DOCUMENT_EXTENSIONS)])
     signature_status = models.CharField(max_length=20, default="draft", choices=[
         ("draft", "Draft"), ("sent", "Awaiting signature"), ("signed", "Signed")])
     worker_approval_status = models.CharField(max_length=20, default="pending", choices=[
@@ -172,6 +181,25 @@ class Contract(models.Model):
     signed_ip = models.GenericIPAddressField(null=True, blank=True)
     content_hash = models.CharField(max_length=64, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class ContractDocument(models.Model):
+    """A supporting file attached to a contract.
+
+    The contract's own `document` field keeps holding the first upload so
+    existing records, their download links and the PDF preview are untouched;
+    every further file an employer attaches lands here.
+    """
+    contract = models.ForeignKey(Contract, on_delete=models.CASCADE, related_name="extra_documents")
+    file = models.FileField(upload_to=contract_path,
+        validators=[FileExtensionValidator(DOCUMENT_EXTENSIONS)])
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["pk"]
+
+    def __str__(self):
+        return self.file.name.rsplit("/", 1)[-1]
 
 
 class ContractTerminationRequest(models.Model):
@@ -434,6 +462,7 @@ class PayrollPolicy(models.Model):
     # Share of the pay left after other deductions that salary advance
     # installments and asset recoveries may take together in one payroll.
     advance_deduction_limit_percent = rate_field(default=Decimal("33.33"))
+    advance_charge_percent = rate_field(default=Decimal("18.00"))
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -475,7 +504,7 @@ class PayrollDeductionLine(models.Model):
 
 
 class SalaryAdvance(models.Model):
-    """An interest-free advance repaid through monthly payroll installments.
+    """An advance repaid through monthly payroll installments.
 
     The status is derived from disbursement and repayments rather than stored,
     so it can never drift from the money actually recorded.
@@ -483,6 +512,9 @@ class SalaryAdvance(models.Model):
 
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name="salary_advances")
     amount = money_field()
+    charge_percent = rate_field(default=Decimal("0.00"))
+    charge_amount = money_field(default=0)
+    total_repayment = money_field(default=0)
     currency = models.CharField(max_length=3, default="RWF")
     issue_date = models.DateField()
     reason = models.TextField()
@@ -506,6 +538,9 @@ class SalaryAdvanceRequest(models.Model):
 
     employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name="salary_advance_requests")
     amount = money_field()
+    charge_percent = rate_field(default=Decimal("0.00"))
+    charge_amount = money_field(default=0)
+    total_repayment = money_field(default=0)
     currency = models.CharField(max_length=3, default="RWF")
     reason = models.TextField(blank=True)
     status = models.CharField(max_length=10, choices=STATUSES, default="pending", db_index=True)
@@ -737,6 +772,45 @@ class SimulatedDoor(models.Model):
     started_at = models.DateTimeField()
     last_seen_at = models.DateTimeField()
     unlocked_until = models.DateTimeField(null=True, blank=True)
+
+
+class DoorDevice(models.Model):
+    """An enrolled controller. The raw shared secret is never stored."""
+
+    room = models.OneToOneField(Room, on_delete=models.CASCADE, related_name="door_device")
+    device_id = models.CharField(max_length=100, unique=True)
+    secret_hash = models.CharField(max_length=64)
+    enabled = models.BooleanField(default=True)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+    relay_locked = models.BooleanField(default=True)
+    last_command_id = models.UUIDField(null=True, blank=True)
+    last_acknowledged_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class DoorUnlockCommand(models.Model):
+    """A short-lived, one-use instruction created only after access authorization."""
+
+    STATES = [
+        ("created", "Created"), ("pending", "Pending"), ("claimed", "Claimed"), ("executing", "Executing"),
+        ("completed", "Completed"), ("expired", "Expired"), ("failed", "Failed"),
+    ]
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    device = models.ForeignKey(DoorDevice, on_delete=models.CASCADE, related_name="commands")
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="+")
+    access_attempt = models.OneToOneField(RoomAccessAttempt, on_delete=models.SET_NULL, null=True, blank=True,
+                                         related_name="device_command")
+    state = models.CharField(max_length=12, choices=STATES, default="pending")
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    claimed_at = models.DateTimeField(null=True, blank=True)
+    acknowledged_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    failure_code = models.CharField(max_length=80, blank=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        indexes = [models.Index(fields=["device", "state", "expires_at"])]
 
 
 # --- Disclosed employee activity monitoring ----------------------------------

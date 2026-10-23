@@ -8,7 +8,7 @@ import ModalDialog from "./components/ModalDialog";
 import ChangePasswordDialog from "./components/ChangePasswordDialog";
 import DashboardTopNav from "./components/DashboardTopNav";
 import { useConfirm } from "./components/ConfirmDialog";
-import { acknowledgeMonitoringDisclosure, acknowledgeMyContractTermination, cancelMyLeave, fetchAccount, fetchMonitoringDisclosure, fetchMyAnnouncements, fetchMyAttendance, fetchMyCalendar, fetchMyContracts, fetchMyLeave, fetchMyPhoto, fetchMyProfile, markAllMyAnnouncementsRead, markAllMyCalendarRead, markMyAnnouncementRead, markMyCalendarEventRead, requestMyContractTermination, saveMyProfile, signMyContract, submitMyLeave, updateMyLeave } from "./api";
+import { acknowledgeMonitoringDisclosure, recordMyAttendance, acknowledgeMyContractTermination, cancelMyLeave, fetchAccount, fetchMonitoringDisclosure, fetchMyAnnouncements, fetchMyAttendance, fetchMyCalendar, fetchMyContracts, fetchMyLeave, fetchMyPhoto, fetchMyProfile, markAllMyAnnouncementsRead, markAllMyCalendarRead, markMyAnnouncementRead, markMyCalendarEventRead, requestMyContractTermination, saveMyProfile, signMyContract, submitMyLeave, updateMyLeave } from "./api";
 import { decisionText, label, longDate, money, today } from "./managerConfig";
 
 // The employer supplies only name, job title and email. Everything here is the
@@ -178,6 +178,8 @@ function TimeClockCard({ token }) {
   const [shift, setShift] = useState("day");
   const [error, setError] = useState("");
   const [now, setNow] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -195,12 +197,30 @@ function TimeClockCard({ token }) {
     load();
     const timer = window.setInterval(load, 3000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [token]);
+  }, [token, reload]);
 
   const shifts = day?.shifts || (day?.attendance ? [day.attendance] : []);
   const attendance = shifts.find((item) => item.shift === shift);
   const visits = attendance?.visits || [];
   const activeVisit = visits.find((visit) => !visit.check_out_at);
+  const finalized = Boolean(attendance?.finalized_at);
+
+  // Clocking in and out must not depend on a door: the simulator is often not
+  // running, which would otherwise strand someone inside with no way to leave.
+  async function clock(action) {
+    setBusy(true);
+    setError("");
+    try {
+      const at = new Date();
+      await recordMyAttendance(token, {
+        action, shift,
+        time: `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}:${String(at.getSeconds()).padStart(2, "0")}`,
+      });
+      setReload((value) => value + 1);
+    } catch (err) { setError(err.message); }
+    finally { setBusy(false); }
+  }
+
   return <section className="panel account-panel time-clock-card" id="attendance">
     <div className="time-clock-heading"><div><p className="eyebrow dark-eyebrow">TODAY</p><h3>{label(shift)} shift</h3></div>
       <span className={`status-badge ${activeVisit ? "status-sent" : attendance ? "status-signed" : "status-draft"}`}>{activeVisit ? "In office" : attendance?.finalized_at ? "Checked out" : attendance ? "Temporarily outside" : "Not checked in"}</span>
@@ -212,6 +232,11 @@ function TimeClockCard({ token }) {
     {error && <p className="message error" role="alert">{error}</p>}
     {day?.almost_leaving && !attendance?.finalized_at && <p className="message success" role="status">You are almost ready to leave. Remember to Check Out for your final departure.</p>}
     <p className="message">Use Check In for your first arrival, Scan Out and Scan In for temporary trips, and Check Out only for your final departure.</p>
+    <div className="time-clock-actions">
+      {!attendance?.check_in_at && <button className="button button-coral" type="button" disabled={busy} onClick={() => clock("check_in")}>{busy ? "Working…" : "Check In"}</button>}
+      {attendance?.check_in_at && !finalized && <button className="button button-coral" type="button" disabled={busy} onClick={() => clock("check_out")}>{busy ? "Working…" : "Check Out"}</button>}
+      {finalized && <p className="muted">This shift is closed. Temporary trips use Scan Out and Scan In at the door.</p>}
+    </div>
     {attendance && <dl className="clock-times">
       <dt>First check-in</dt><dd>{timeOf(attendance.check_in_at)}</dd>
       <dt>Latest check-out</dt><dd>{timeOf(attendance.check_out_at)}</dd>

@@ -72,6 +72,13 @@ REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
 
+# Local/Wokwi door controller integration. Device secrets are enrolled into the
+# database as SHA-256 derived keys; raw secrets never enter frontend responses.
+DOOR_GATEWAY = os.getenv("DOOR_GATEWAY", "")
+DOOR_COMMAND_TTL_SECONDS = int(os.getenv("DOOR_COMMAND_TTL_SECONDS", "8"))
+DOOR_DEVICE_OFFLINE_SECONDS = int(os.getenv("DOOR_DEVICE_OFFLINE_SECONDS", "10"))
+DOOR_SIGNATURE_WINDOW_SECONDS = int(os.getenv("DOOR_SIGNATURE_WINDOW_SECONDS", "60"))
+
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(hours=8),
     "REFRESH_TOKEN_LIFETIME": timedelta(hours=8),
@@ -237,6 +244,10 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
+
+# How often to sweep for due departure reminders, in seconds. 0 turns the
+# in-process timer off so an external scheduler can run the management command.
+ATTENDANCE_REMINDER_SECONDS = int(os.getenv("ATTENDANCE_REMINDER_SECONDS", "60"))
 
 DATABASES = {"default": dj_database_url.parse(
     os.environ["DATABASE_URL"], conn_max_age=600, conn_health_checks=True,

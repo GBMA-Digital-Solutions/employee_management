@@ -24,6 +24,9 @@ class AdminActivityTests(APITestCase):
         self.client.force_authenticate(self.admin)
 
     def hire(self, business, email, department="Sales", **extra):
+        # Active by default, since these tests count working staff. Callers can
+        # still pass is_active=False through **extra to cover the other case.
+        extra.setdefault("is_active", True)
         return Employee.objects.create(business=business, first_name="Aline", last_name="Uwase", email=email,
                                        job_title="Accountant", department=department,
                                        date_joined=self.today - timedelta(days=30), phone="0788000000",

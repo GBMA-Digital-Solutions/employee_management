@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import ModalDialog from "./components/ModalDialog";
 import { useConfirm } from "./components/ConfirmDialog";
 import { addAdvanceRepayment, decideSalaryAdvanceRequest, deleteRecord, downloadEvidence, fetchAssetSummary,
-  fetchRecords, saveRecord } from "./api";
+  fetchPayrollPolicy, fetchRecords, saveRecord, updatePayrollPolicy } from "./api";
 import { decisionText, label, money, today } from "./managerConfig";
 
 const CURRENCIES = ["RWF", "ZAR", "USD", "EUR", "GBP", "BWP", "NAD", "LSL", "SZL", "KES", "NGN"];
@@ -347,6 +347,7 @@ export function SalaryAdvancesPage({ token, employees, onAuthError, onRequestsCh
   const [action, setAction] = useState(null);
   const { form, setForm, bind } = useForm();
   const [confirm, confirmation] = useConfirm();
+  const [chargePercent, setChargePercent] = useState("18.00");
   const rows = advances.rows;
 
   const fail = (err) => { setError(err.message); onAuthError(err); };
@@ -355,6 +356,20 @@ export function SalaryAdvancesPage({ token, employees, onAuthError, onRequestsCh
   const rwf = rows.filter((row) => row.currency === "RWF");
   const outstanding = rwf.reduce((sum, row) => sum + Number(row.outstanding_balance), 0);
   const repaid = rwf.reduce((sum, row) => sum + Number(row.total_repaid), 0);
+
+  useEffect(() => {
+    fetchPayrollPolicy(token).then((policy) => setChargePercent(policy.advance_charge_percent)).catch(fail);
+  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function saveCharge(event) {
+    event.preventDefault();
+    setBusy(true); setError(""); setNotice("");
+    try {
+      const policy = await updatePayrollPolicy(token, { advance_charge_percent: chargePercent });
+      setChargePercent(policy.advance_charge_percent);
+      setNotice(`The one-time salary advance charge is now ${policy.advance_charge_percent}%. New requests use this rate.`);
+    } catch (err) { fail(err); } finally { setBusy(false); }
+  }
 
   function openForm(row = null) {
     setError("");
@@ -425,12 +440,17 @@ export function SalaryAdvancesPage({ token, employees, onAuthError, onRequestsCh
     <Heading title="Salary advances"
       action={<button type="button" className="button button-coral" disabled={!employees.length} onClick={() => openForm()}>+ Add Salary Advance</button>} />
     <Messages error={error || advances.error || requests.error} notice={notice} />
+    <section className="panel records-panel"><div className="records-heading"><div><h3>Advance charge</h3><p>Applied once to new salary advance requests. Existing requests keep the rate shown when requested.</p></div></div>
+      <form className="record-form" onSubmit={saveCharge}><div className="record-fields"><Field id="advance-charge-percent" title="One-time repayment charge (%)"><input id="advance-charge-percent" type="number" min="0" max="100" step="0.01" value={chargePercent} onChange={(event) => setChargePercent(event.target.value)} required /></Field></div><div className="form-actions"><button className="button button-coral" type="submit" disabled={busy}>Save charge</button></div></form>
+    </section>
     {pendingCount > 0 && <section className="panel records-panel" aria-label="Advance requests from employees">
       <div className="records-toolbar"><span className="record-count">{pendingCount} {pendingCount === 1 ? "request" : "requests"} from employees awaiting your decision</span></div>
       <Table rows={pendingRequests} empty="No pending requests." columns={[
         { title: "Employee", render: (row) => row.employee_name },
         { title: "Requested", render: (row) => dateTime(row.requested_at) },
         { title: "Amount", render: (row) => money(row.amount, row.currency) },
+        { title: "Charge", render: (row) => `${money(row.charge_amount, row.currency)} (${row.charge_percent}%)` },
+        { title: "Total repayment", render: (row) => money(row.total_repayment, row.currency) },
         { title: "Reason", render: (row) => row.reason || "—" },
       ]} actions={(row) => <>
         <button type="button" className="button button-coral" disabled={busy} onClick={() => decide(row, "approve")}>Approve</button>
@@ -470,13 +490,13 @@ export function SalaryAdvancesPage({ token, employees, onAuthError, onRequestsCh
     {viewing && <ModalDialog title="Salary advance" wide onClose={() => setViewingId(null)}><section className="account-panel leave-preview payroll-detail">
       <h3>{viewing.employee_name} <StatusBadge value={viewing.status} /></h3>
       <Facts items={[
-        ["Original amount", money(viewing.amount, viewing.currency)], ["Total repaid", money(viewing.total_repaid, viewing.currency)],
+        ["Advance amount", money(viewing.amount, viewing.currency)], ["One-time charge", `${money(viewing.charge_amount, viewing.currency)} (${viewing.charge_percent}%)`],
+        ["Total repayment", money(viewing.total_repayment, viewing.currency)], ["Total repaid", money(viewing.total_repaid, viewing.currency)],
         ["Outstanding balance", money(viewing.outstanding_balance, viewing.currency)], ["Scheduled in draft payroll", money(viewing.scheduled_deductions, viewing.currency)],
         ["Next installment", Number(viewing.next_installment) ? money(viewing.next_installment, viewing.currency) : "None"], ["Monthly installment", money(viewing.installment_amount, viewing.currency)],
         ["Issued", viewing.issue_date], ["Approved by", viewing.approved_by], ["Repayment starts", String(viewing.first_repayment_month).slice(0, 7)],
         ["Given to employee", viewing.disbursed_on ? `${viewing.disbursed_on} · ${methodText(viewing.disbursement_method)}` : viewing.issue_date],
         viewing.disbursement_reference && ["Payment reference", viewing.disbursement_reference],
-        ["Interest", "None"],
       ]} />
       {viewing.reason && <><h4>Reason</h4><p className="preserve-lines">{viewing.reason}</p></>}
       {viewing.notes && <><h4>Notes</h4><p className="preserve-lines">{viewing.notes}</p></>}

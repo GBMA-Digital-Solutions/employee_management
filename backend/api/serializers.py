@@ -8,7 +8,8 @@ from django.utils import timezone
 
 from . import contract_pay, leave_management, onboarding
 from .contract_content import sanitize_contract_html
-from .models import (Employee, Contract, ContractTerminationRequest, Attendance, AttendanceVisit,
+from .models import (DOCUMENT_EXTENSIONS, Employee, Contract, ContractDocument,
+                     ContractTerminationRequest, Attendance, AttendanceVisit,
                      LeaveBalance, LeaveRequest, Holiday, Announcement,
                      CalendarEvent, Salary, Payroll)
 from .permissions import business_id_for
@@ -32,6 +33,8 @@ class EmployeeSerializer(serializers.ModelSerializer):
     department = serializers.CharField(max_length=100, required=False, allow_blank=True)
     date_joined = serializers.DateField(required=False, default=timezone.localdate)
     account_status = serializers.SerializerMethodField()
+    workflow_status = serializers.SerializerMethodField()
+    pending_approval_contract_id = serializers.SerializerMethodField()
     invite = serializers.SerializerMethodField()
 
     @extend_schema_field(serializers.ChoiceField(
@@ -42,6 +45,60 @@ class EmployeeSerializer(serializers.ModelSerializer):
         if not account:
             return "none"
         return "pending_first_sign_in" if account.must_change_password else "active"
+
+    @extend_schema_field(serializers.ChoiceField(choices=[
+        "invited", "no_contract", "pending_contract", "pending_approval", "active", "inactive",
+    ]))
+    def get_workflow_status(self, obj):
+        """Return the single manager-facing lifecycle state for an employee."""
+        account = getattr(obj, "account", None)
+        if not account or account.must_change_password:
+            return "invited"
+
+        contracts = list(obj.contracts.all())
+        if not contracts:
+            return "no_contract"
+        approved = any(
+            contract.status == "active"
+            and contract.signature_status == "signed"
+            and contract.worker_approval_status == "approved"
+            for contract in contracts
+        )
+        if approved:
+            return "active" if obj.is_active else "inactive"
+        # Checked before the finished-contract fall-through below so a rehire,
+        # whose older contract has ended, still surfaces its new signature for
+        # approval rather than reading as a past employee.
+        if any(
+            contract.signature_status == "signed"
+            and contract.worker_approval_status != "approved"
+            for contract in contracts
+        ):
+            return "pending_approval"
+        if any(contract.signature_status == "signed" for contract in contracts):
+            # Signed and approved, but no contract is live any more: the
+            # employment ended or was terminated. There is nothing left to
+            # approve, so this is a past employee, not a pending one.
+            return "active" if obj.is_active else "inactive"
+        return "pending_contract"
+
+    @extend_schema_field(serializers.IntegerField(allow_null=True))
+    def get_pending_approval_contract_id(self, obj):
+        contract = next((contract for contract in sorted(
+            obj.contracts.all(), key=lambda item: (item.start_date, item.pk), reverse=True
+        ) if contract.signature_status == "signed"
+            and contract.worker_approval_status != "approved"), None)
+        return contract.pk if contract else None
+
+    def validate_is_active(self, value):
+        # Managers may deactivate an approved worker, but activation must pass
+        # through ContractViewSet.approve_worker so signature and approval
+        # invariants (and their notifications) cannot be bypassed.
+        if value and (not self.instance or not self.instance.is_active):
+            raise serializers.ValidationError(
+                "Approve the employee's signed contract to activate this worker."
+            )
+        return value
 
     @extend_schema_field(InviteResultSerializer(allow_null=True))
     def get_invite(self, obj):
@@ -103,6 +160,7 @@ class EmployeeSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         document, title = self.pop_contract(validated_data)
+        validated_data["is_active"] = False
         with transaction.atomic():
             employee = super().create(validated_data)
             if document:
@@ -161,10 +219,10 @@ class EmployeeSerializer(serializers.ModelSerializer):
             "job_description", "employment_type", "is_active",
             "photo", "photo_name",
             "contract_document", "contract_title", "latest_contract",
-            "account_status", "invite",
+            "account_status", "workflow_status", "pending_approval_contract_id", "invite",
             "created_at",
         ]
-        read_only_fields = ["id", "created_at", "account_status", "invite"]
+        read_only_fields = ["id", "created_at", "account_status", "workflow_status", "pending_approval_contract_id", "invite"]
         validators = []
 
 
@@ -204,6 +262,9 @@ class ContractTerminationSerializer(serializers.ModelSerializer):
 class ContractSerializer(ManagerRecordSerializer):
     document = serializers.FileField(write_only=True, required=False)
     document_name = serializers.SerializerMethodField()
+    # Repeat `documents` in multipart/form-data to attach several files at once.
+    documents = serializers.ListField(child=serializers.FileField(), write_only=True, required=False)
+    attachments = serializers.SerializerMethodField()
     employee_email = serializers.EmailField(source="employee.email", read_only=True)
     termination = serializers.SerializerMethodField()
 
@@ -216,12 +277,34 @@ class ContractSerializer(ManagerRecordSerializer):
         request = obj.termination_requests.order_by("-created_at", "-id").first()
         return ContractTerminationSerializer(request).data if request else None
 
+    @extend_schema_field(serializers.ListField(child=serializers.DictField()))
+    def get_attachments(self, obj):
+        """Every file on this contract, the original one first."""
+        primary = [{"id": None, "name": obj.document.name.rsplit("/", 1)[-1]}] if obj.document else []
+        return primary + [{"id": row.pk, "name": row.file.name.rsplit("/", 1)[-1]}
+                          for row in obj.extra_documents.all()]
+
     def validate_document(self, value):
         from django.core.validators import FileExtensionValidator
-        FileExtensionValidator(["pdf", "doc", "docx"])(value)
+        FileExtensionValidator(DOCUMENT_EXTENSIONS)(value)
         if value.size > 10 * 1024 * 1024:
             raise serializers.ValidationError("Contract documents must be 10 MB or smaller.")
         return value
+
+    def validate_documents(self, value):
+        for item in value:
+            self.validate_document(item)
+        return value
+
+    def store_documents(self, contract, documents):
+        """Fill the contract's own document slot first so its existing download
+        and preview links keep working, then attach whatever is left."""
+        for item in documents:
+            if contract.document:
+                ContractDocument.objects.create(contract=contract, file=item)
+            else:
+                contract.document = item
+                contract.save(update_fields=["document"])
 
     def validate_salary_currency(self, value):
         return self.validate_currency(value)
@@ -244,14 +327,18 @@ class ContractSerializer(ManagerRecordSerializer):
         return clean
 
     def create(self, validated_data):
+        documents = validated_data.pop("documents", [])
         contract = super().create(validated_data)
+        self.store_documents(contract, documents)
         if contract.department and contract.employee.department != contract.department:
             contract.employee.department = contract.department
             contract.employee.save(update_fields=["department"])
         return contract
 
     def update(self, instance, validated_data):
+        documents = validated_data.pop("documents", [])
         contract = super().update(instance, validated_data)
+        self.store_documents(contract, documents)
         if contract.department and contract.employee.department != contract.department:
             contract.employee.department = contract.department
             contract.employee.save(update_fields=["department"])
@@ -261,7 +348,7 @@ class ContractSerializer(ManagerRecordSerializer):
         model = Contract
         fields = [
             "id", "employee", "employee_name", "employee_email", "revision_of", "employer_message", "title", "department", "start_date", "end_date", "status",
-            "monthly_salary", "salary_currency", "terms", "content", "document", "document_name", "signature_status", "sent_at",
+            "monthly_salary", "salary_currency", "terms", "content", "document", "document_name", "documents", "attachments", "signature_status", "sent_at",
             "notification_sent_at", "signed_at", "signer_name", "signature_data", "worker_approval_status",
             "worker_approved_at", "worker_approved_by", "termination", "created_at",
         ]

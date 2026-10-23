@@ -14,3 +14,4 @@ node_modules/
 backend/staticfiles/
 *.log
 .verification/
+wokwi/secrets.h

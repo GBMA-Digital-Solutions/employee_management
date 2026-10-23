@@ -33,6 +33,11 @@ class PayrollFeatureTestCase(APITestCase):
             Contract.objects.create(employee=employee, title="Signed employment contract",
                                     start_date=date(2026, 1, 1), status="active", signature_status="signed",
                                     worker_approval_status="approved")
+            # Approving a signed contract is what promotes a new hire to an
+            # active worker, so mirror that here instead of leaving the fixture
+            # in the inactive state a brand-new Employee now starts in.
+            employee.is_active = True
+            employee.save(update_fields=["is_active"])
         return employee
 
     def payroll(self, base="300000", employee=None, start="2026-09-01", end="2026-09-30", currency="RWF",
@@ -626,6 +631,9 @@ class EmployeePayrollTests(PayrollFeatureTestCase):
         created = self.request_advance()
         self.assertEqual(created.status_code, 201, created.data)
         self.assertEqual((created.data["status"], created.data["currency"]), ("pending", "RWF"))
+        self.assertEqual(Decimal(created.data["charge_percent"]), Decimal("18.00"))
+        self.assertEqual(Decimal(created.data["charge_amount"]), Decimal("9000.00"))
+        self.assertEqual(Decimal(created.data["total_repayment"]), Decimal("59000.00"))
         self.assertEqual(self.request_advance("1000").status_code, 400)
         self.assertFalse(SalaryAdvance.objects.exists())
 
@@ -638,7 +646,9 @@ class EmployeePayrollTests(PayrollFeatureTestCase):
         advance = SalaryAdvance.objects.get()
         self.assertEqual(approved.data["advance"], advance.pk)
         self.assertEqual((advance.amount, advance.installment_amount, advance.issue_date, advance.reason),
-                         (Decimal("50000.00"), Decimal("50000.00"), timezone.localdate(), "Rent"))
+                         (Decimal("50000.00"), Decimal("59000.00"), timezone.localdate(), "Rent"))
+        self.assertEqual((advance.charge_amount, advance.total_repayment),
+                         (Decimal("9000.00"), Decimal("59000.00")))
         self.assertEqual(self.client.post(f"/api/salary-advance-requests/{created.data['id']}/approve/", {},
                                           format="json").status_code, 400)
         self.assertTrue(self.client.get(f"/api/salary-advances/{advance.pk}/").data["from_request"])
@@ -647,7 +657,7 @@ class EmployeePayrollTests(PayrollFeatureTestCase):
         self.assertEqual(self.client.delete(f"/api/salary-advances/{advance.pk}/").status_code, 400)
         month = str(timezone.localdate())[:7]
         preview = self.client.get(f"/api/salaries/{self.salary.pk}/payment_preview/", {"month": month}).data
-        self.assertEqual(Decimal(preview["advance_deductions"]), Decimal("50000"))
+        self.assertEqual(Decimal(preview["advance_deductions"]), Decimal("59000"))
 
         self.as_worker()
         data = self.client.get("/api/me/payroll/").data
@@ -655,6 +665,7 @@ class EmployeePayrollTests(PayrollFeatureTestCase):
         self.assertTrue(data["requests"][0]["decided_by"])
         self.assertIsNotNone(data["requests"][0]["decided_at"])
         self.assertEqual(Decimal(data["advances"][0]["amount"]), Decimal("50000"))
+        self.assertEqual(Decimal(data["advances"][0]["total_repayment"]), Decimal("59000"))
         self.assertEqual(self.client.delete(f"/api/me/salary-advance-requests/{created.data['id']}/").status_code, 400)
 
     def test_rejection_cancellation_and_access_rules(self):
@@ -686,3 +697,18 @@ class EmployeePayrollTests(PayrollFeatureTestCase):
         request = self.client.get("/api/me/payroll/").data["requests"][0]
         self.assertEqual((request["status"], request["decision_notes"]), ("rejected", "Budget closed this month"))
         self.assertEqual(SalaryAdvanceRequest.objects.count(), 1)
+
+    def test_request_is_capped_at_thirty_percent_and_charge_is_configurable(self):
+        self.as_worker()
+        too_large = self.request_advance("90000.01")
+        self.assertEqual(too_large.status_code, 400)
+        self.assertIn("30%", str(too_large.data))
+
+        self.as_employer()
+        changed = self.client.patch("/api/payroll-policy/", {"advance_charge_percent": "12.5"}, format="json")
+        self.assertEqual(changed.status_code, 200, changed.data)
+        self.as_worker()
+        request = self.request_advance("90000")
+        self.assertEqual(request.status_code, 201, request.data)
+        self.assertEqual(Decimal(request.data["charge_amount"]), Decimal("11250.00"))
+        self.assertEqual(Decimal(request.data["total_repayment"]), Decimal("101250.00"))

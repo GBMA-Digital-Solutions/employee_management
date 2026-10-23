@@ -171,6 +171,10 @@ export function downloadContract(token, id) {
   return request(`/api/contracts/${id}/document/`, { token, download: true });
 }
 
+export function downloadContractAttachment(token, id, attachmentId) {
+  return request(`/api/contracts/${id}/attachments/${attachmentId}/`, { token, download: true });
+}
+
 export function sendContractForSignature(token, id) {
   return request(`/api/contracts/${id}/send-for-signature/`, { method: "POST", token });
 }
@@ -269,6 +273,10 @@ export function fetchMyPhoto(token) {
 
 export function fetchMyAttendance(token) {
   return request("/api/me/attendance/", { token });
+}
+
+export function recordMyAttendance(token, body) {
+  return request("/api/me/attendance/", { method: "POST", token, body });
 }
 
 export function fetchMyLeave(token) {
@@ -458,6 +466,14 @@ export function calculatePayroll(token, payroll, otherDeductions) {
 
 export function addAdvanceRepayment(token, id, body) {
   return request(`/api/salary-advances/${id}/repayments/`, { method: "POST", token, body });
+}
+
+export function fetchPayrollPolicy(token) {
+  return request("/api/payroll-policy/", { token });
+}
+
+export function updatePayrollPolicy(token, body) {
+  return request("/api/payroll-policy/", { method: "PATCH", token, body });
 }
 
 export function fetchAssetSummary(token) {

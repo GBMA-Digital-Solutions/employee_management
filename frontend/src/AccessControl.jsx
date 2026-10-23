@@ -304,6 +304,13 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
   }, {}));
   const selected = rooms.rows.find((room) => room.id === selectedId) || null;
 
+  function attendanceAction(room, action) {
+    // A live simulated door proves proximity with the code on its screen; an
+    // offline door has no screen, so the action goes straight through.
+    if (room.device_status === "simulator") return setScanningRoom({ room, action });
+    return unlock(room, "", action);
+  }
+
   async function unlock(room, proximityProof = "", attendanceAction = "") {
     setBusy(true);
     setError("");
@@ -313,7 +320,8 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
       // A simulated door supplies its short-lived proof only through the QR code scanned at the door.
       const result = await unlockRoom(token, room.id, room.device_status === "simulator"
         ? { access_method: "door_code", proximity_proof: proximityProof, ...(attendanceAction ? { attendance_action: attendanceAction } : {}) }
-        : { access_method: "NDEFReader" in window ? "nfc" : "bluetooth", proximity_proof: "" });
+        : { access_method: "NDEFReader" in window ? "nfc" : "bluetooth", proximity_proof: "",
+            ...(attendanceAction ? { attendance_action: attendanceAction } : {}) });
       setNotice(result.detail);
       await rooms.reload();
     } catch (err) {
@@ -345,27 +353,28 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
       <div><dt>Door hardware</dt><dd>{DEVICE_STATUS[selected.device_status] || selected.device_status}</dd></div>
     </dl>
     <div className="room-detail-actions">
-      {selected.can_unlock && selected.device_status === "simulator" && selected.is_check_in_door && <div className="attendance-scan-actions">
+      {selected.can_unlock && selected.is_check_in_door && <div className="attendance-scan-actions">
         <strong>{selected.attendance_state === "inside" ? "You are currently in the office"
           : selected.attendance_state === "outside" ? "You are currently outside the office"
           : selected.attendance_state === "completed" ? "Your workday is complete"
           : "Start your workday"}</strong>
         {selected.attendance_state === "not_started" && <button type="button" className="button button-coral" disabled={busy}
-          onClick={() => setScanningRoom({ room: selected, action: "scan_in" })}>Check In — first arrival</button>}
+          onClick={() => attendanceAction(selected, "scan_in")}>Check In, first arrival</button>}
         {selected.attendance_state === "inside" && <>
           <button type="button" className="button button-coral" disabled={busy}
-            onClick={() => setScanningRoom({ room: selected, action: "scan_out" })}>Scan Out — leaving temporarily</button>
+            onClick={() => attendanceAction(selected, "scan_out")}>Scan Out, leaving temporarily</button>
           <button type="button" className="button button-outline" disabled={busy}
-            onClick={() => setScanningRoom({ room: selected, action: "check_out" })}>Check Out — final departure</button>
+            onClick={() => attendanceAction(selected, "check_out")}>Check Out, final departure</button>
         </>}
         {selected.attendance_state === "outside" && <button type="button" className="button button-coral" disabled={busy}
-          onClick={() => setScanningRoom({ room: selected, action: "scan_in" })}>Scan In — returning</button>}
+          onClick={() => attendanceAction(selected, "scan_in")}>Scan In, returning</button>}
+        {selected.device_status !== "simulator" && <small className="muted">The door is offline. Leaving is still recorded; arriving needs the door running.</small>}
       </div>}
       {(employer || selected.can_unlock) && selected.device_status === "simulator" && !(selected.can_unlock && selected.is_check_in_door) && <button
         type="button" className="button button-coral" disabled={busy} onClick={() => setScanningRoom({ room: selected, action: "" })}>
         {busy ? "Checking…" : "Scan QR to unlock"}
       </button>}
-      {(employer || selected.can_unlock) && selected.device_status !== "simulator" && <button type="button" className="button button-coral"
+      {(employer || selected.can_unlock) && selected.device_status !== "simulator" && !(selected.can_unlock && selected.is_check_in_door) && <button type="button" className="button button-coral"
         disabled={busy} onClick={() => unlock(selected)}>{busy ? "Checking…" : "Unlock door"}</button>}
       {employer && <>
         <button type="button" className="button button-outline" onClick={() => setManaging(selected)}>Manage permissions</button>
@@ -669,6 +678,16 @@ function SimulatorPage({ token, onAuthError }) {
         <div className="door-sim-visual"><DoorIcon /></div>
         <strong className="door-sim-state">{door.locked ? "Locked" : "Unlocked"}</strong>
         <p className="door-sim-note">{door.locked ? "Waiting for an authorized employee." : `Locks again in ${Math.ceil(door.relocks_in)} s`}</p>
+        <div className="door-sim-device" aria-live="polite">
+          <strong>ESP32 controller</strong>
+          {!door.esp32?.configured ? <p>Not enrolled — browser-only simulation.</p> : <>
+            <p>Connection: <span className={`status-badge status-${door.esp32.connection === "online" ? "granted" : "denied"}`}>{door.esp32.connection}</span></p>
+            <p>Relay / maglock: <strong>{door.esp32.relay_locked ? "Locked (LED on)" : "Unlocked (LED off)"}</strong></p>
+            <p>Last command: {door.esp32.last_command
+              ? `${door.esp32.last_command.state} · ${door.esp32.last_command.id}`
+              : "No command sent yet"}</p>
+          </>}
+        </div>
         <div className="door-sim-code">
           <small>Scan to unlock</small>
           {qrImage && <img src={qrImage} alt={`Changing QR code for ${door.room_name}`} />}

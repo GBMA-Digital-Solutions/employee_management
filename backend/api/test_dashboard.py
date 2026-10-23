@@ -44,7 +44,7 @@ class PlatformDashboardTests(APITestCase):
         self.company("Pending Plc", status="pending")
         Employee.objects.create(business=self.business, first_name="A", last_name="B",
                                 email="a@example.com", job_title="Analyst",
-                                date_joined=timezone.localdate())
+                                date_joined=timezone.localdate(), is_active=True)
         Employee.objects.create(business=self.business, first_name="C", last_name="D",
                                 email="c@example.com", job_title="Clerk",
                                 date_joined=timezone.localdate(), is_active=False)

@@ -45,6 +45,7 @@ class WorkdayFeatureTests(APITestCase):
         employee = Employee.objects.create(
             business=self.business, first_name="Ada", last_name="Lovelace",
             email="ada@example.com", job_title="Engineer", date_joined=timezone.localdate(),
+            is_active=True,
         )
         attendance = Attendance.objects.create(
             employee=employee, date=timezone.localdate(), check_in_at=now - timedelta(hours=7, minutes=50),
