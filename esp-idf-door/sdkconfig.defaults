@@ -13,6 +13,13 @@ CONFIG_PARTITION_TABLE_FILENAME="partitions_singleapp_large.csv"
 # Verify the API certificate against the bundled roots instead of pinning one.
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+# Render serves GTS Root R4 cross-signed by the original GlobalSign Root CA.
+# The bundle carries GTS Root R4 but not that GlobalSign root, so the default
+# lookup, which only tries the issuer of the topmost certificate sent, fails
+# with "No matching trusted root certificate found". This option lets mbedtls
+# anchor on any bundled certificate in the chain instead, at a cost of about
+# 700 bytes of heap.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
 
 # The controller task runs the TLS handshake, which can outlast the default
 # watchdog window on a slow network.
