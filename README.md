@@ -6,8 +6,8 @@ reach only their own records, and a single platform owner (super admin) manages
 the companies themselves.
 
 The stack is a React frontend (Vite), a Django REST Framework backend,
-PostgreSQL, and JWT authentication. An optional Wokwi-simulated ESP32 door
-controller can be driven from the Access Control screens.
+PostgreSQL, and JWT authentication. A physical ESP32 maglock controller can be
+enrolled per room and driven from the Access Control screens.
 
 ## Contents
 
@@ -25,7 +25,7 @@ controller can be driven from the Access Control screens.
 - [API documentation](#api-documentation)
 - [Tests](#tests)
 - [Vercel and Render](#vercel-and-render)
-- [Wokwi ESP32 door](#wokwi-esp32-door)
+- [Physical ESP32 door](#physical-esp32-door)
 - [Project layout](#project-layout)
 - [Troubleshooting](#troubleshooting)
 
@@ -62,9 +62,9 @@ Install these before you start:
 - PostgreSQL 14 or newer, running locally.
 - Git.
 
-Optional, only for the simulated door:
+Optional, only for the physical door:
 
-- Visual Studio Code with the PlatformIO IDE and Wokwi for VS Code extensions.
+- ESP-IDF v6.1 and an ESP32 development board on a USB port.
 
 All commands below are PowerShell on Windows, which is the environment this
 project is developed in. On macOS or Linux the only differences are the virtual
@@ -160,9 +160,9 @@ Notes on the rest of the file:
 
 - `DEBUG` defaults to true locally, so you do not need to set it. Set
   `DEBUG=false` only with a real `SECRET_KEY`, or startup will refuse to run.
-- `ALLOWED_HOSTS` defaults to `localhost,127.0.0.1,[::1]`. Add
-  `host.wokwi.internal` to it if you are using the Wokwi door, otherwise the
-  ESP32 is answered with a 400 page instead of JSON.
+- `ALLOWED_HOSTS` defaults to `localhost,127.0.0.1,[::1]`. Add the address the
+  ESP32 uses to reach Django if you are using the physical door, otherwise the
+  board is answered with a 400 page instead of JSON.
 - Email is optional. Leave `EMAIL_HOST` and `BREVO_API_KEY` blank and invitation
   emails are simply not sent. Set `BREVO_API_KEY` to send over HTTPS instead of
   SMTP, which helps on hosts that block outbound SMTP.
@@ -322,9 +322,8 @@ ALLOWED_HOSTS=<your-render-hostname>.onrender.com
 Optional backend variables are `BREVO_API_KEY` and `DEFAULT_FROM_EMAIL` for
 email, plus the three `DOOR_*_SECONDS` values documented in
 `backend/.env.example`. Set
-`DOOR_GATEWAY=api.wokwi_gateway.WokwiPollingGateway` only when an enrolled
-ESP32/Wokwi controller should poll this backend. Virtual browser controllers do
-not need a gateway or secret.
+`DOOR_GATEWAY=api.door_gateway.PhysicalDoorGateway` only when an enrolled ESP32
+should poll this backend.
 
 Vercel must use `frontend` as its Root Directory and set:
 
@@ -334,41 +333,42 @@ VITE_API_URL=https://<your-render-service>.onrender.com
 
 Do not append `/api`. Redeploy the frontend after changing it because Vite
 embeds the value at build time. Keep all device secrets in Render/local
-environment variables or `wokwi/secrets.h`; never use a `VITE_*` variable for a
-secret because those values are public in the browser bundle. See
+environment variables or the firmware's untracked `sdkconfig`; never use a
+`VITE_*` variable for a secret because those values are public in the browser
+bundle. See
 `docs/DEPLOYMENT.md` for the deployment checklist.
 
-## Wokwi ESP32 door
+## Physical ESP32 door
 
-The Door Simulator works immediately in browser-only mode on local, Vercel, and
-Render installations. Selecting a room shows the same Connection,
-Relay / Maglock, and Last Command fields everywhere; the automatically created
-virtual controller follows the browser door state. Wokwi is not required for
-this mode, and its simulated commands are clearly labelled rather than being
-reported as a physical unlock.
+A real ESP32 drives the maglock relay for one room. Django authorizes the
+employee and queues a one-use command that expires in seconds; the board polls
+only for commands that are already authorized and signs every request with
+HMAC-SHA256. An attempt stays `unconfirmed` until the signed acknowledgement
+arrives, so the app never claims a door opened when it did not.
 
-Wokwi is an optional hardware-controller demonstration. Django authorizes a QR
-scan and queues a one-use command; the ESP32 polls only for authorized commands
-and signs every request with HMAC-SHA256. A physical/hardware attempt remains
-unconfirmed until the signed controller acknowledgement arrives. Virtual
-controllers have no secret and are rejected by the device endpoints.
+Every room also gets a virtual controller automatically, which drives the
+Access Control panel. A virtual controller holds no secret and is rejected by
+the device endpoints, so it can never stand in for enrolled hardware.
 
-Full detail is in `docs/WOKWI_DOOR.md`. The short path:
+Full detail is in `docs/PHYSICAL_DOOR.md` and `esp-idf-door/README.md`. The
+short path:
 
 **1. Add the door settings to `backend/.env`.**
 
 ```dotenv
-ALLOWED_HOSTS=localhost,127.0.0.1,host.wokwi.internal
-DOOR_GATEWAY=api.wokwi_gateway.WokwiPollingGateway
+ALLOWED_HOSTS=localhost,127.0.0.1,192.168.137.1
+DOOR_GATEWAY=api.door_gateway.PhysicalDoorGateway
 DOOR_COMMAND_TTL_SECONDS=8
 DOOR_DEVICE_OFFLINE_SECONDS=10
 DOOR_SIGNATURE_WINDOW_SECONDS=60
 ```
 
-Both of the first two are required. Without `ALLOWED_HOSTS` the ESP32 receives a
-Django error page rather than JSON, and without `DOOR_GATEWAY` no unlock command
-is ever queued. Restart Django after editing `.env`, because it is read only at
-startup.
+Both of the first two are required. `ALLOWED_HOSTS` must contain the address
+the board uses to reach Django, or the ESP32 receives a Django error page
+rather than JSON; `192.168.137.1` is the Windows Mobile Hotspot gateway, which
+is the simplest way to let a board reach a server on your own machine. Without
+`DOOR_GATEWAY` no unlock command is ever queued. Restart Django after editing
+`.env`, because it is read only at startup.
 
 **2. Create the room in the app**, under Access Control, and note its door
 identifier (for example `Door 1`). The room already has a virtual controller;
@@ -380,43 +380,41 @@ the device id. The device id is the `--device-id` option. Getting these the
 wrong way round fails with `door_identifier must match exactly one room`.
 
 ```powershell
-$env:WOKWI_DEVICE_SECRET='a-long-random-local-secret'
+$env:DOOR_DEVICE_SECRET='a-long-random-local-secret'
 python manage.py enroll_door_device "Door 1" --device-id "door-101"
-Remove-Item Env:WOKWI_DEVICE_SECRET
+Remove-Item Env:DOOR_DEVICE_SECRET
 ```
 
-If you leave `WOKWI_DEVICE_SECRET` unset, the command generates a secret and
+If you leave `DOOR_DEVICE_SECRET` unset, the command generates a secret and
 prints it once. Only the SHA-256 derivation is stored, so a lost secret means
 re-enrolling.
 
-**4. Create `wokwi/secrets.h`** from the example and paste in the same device id
-and secret. The file is git-ignored and must stay that way.
+**4. Configure the firmware** with the same device id and secret. The values
+land in `esp-idf-door/sdkconfig`, which is git-ignored and must stay that way.
 
 ```powershell
-Copy-Item wokwi\secrets.h.example wokwi\secrets.h
+. C:\Espressif	ools\Microsoft.v6.1.PowerShell_profile.ps1
+cd esp-idf-door
+idf.py menuconfig
 ```
 
-**5. Build the firmware.** PlatformIO Core ships inside the PlatformIO IDE
-extension but is not always on PATH. If `pio` is not recognised, either restart
-VS Code completely so it picks up the PATH entry the extension added, or prefix
-it for the current session:
+The ESP32 has no 5 GHz radio, so the SSID you set has to be a 2.4 GHz network.
+The build refuses to start while the SSID or the secret is empty, because an
+empty value would let the compiler delete the whole controller.
+
+**5. Build and flash**, replacing `COM6` with the port your board appears on.
 
 ```powershell
-$env:Path = "$env:USERPROFILE\.platformio\penv\Scripts;$env:Path"
-cd wokwi
-pio run
+idf.py build
+idf.py -p COM6 flash monitor
 ```
 
-**6. Start the simulation** with Wokwi for VS Code, which includes the private
-gateway that makes `host.wokwi.internal` resolve. Wait for
-`ESP32 online; maglock LED ON (locked)` in the serial monitor. The public Wokwi
-gateway cannot reach a service on your own machine.
-
-**7. Test it.** Sign in as the employer, open Access Control, start the Door
-Simulator for that room, and confirm the page shows the controller online and
-locked. On a phone, sign in as an employee who has a grant for that room, choose
-the room, and scan the rotating QR code on the employer screen. The LED turns
-off for five seconds and the page reports the unlock, then it relocks.
+**6. Test it.** Wait for `Clock synchronization ready` in the serial monitor.
+Sign in as the employer, open Access Control, and confirm the room reports the
+controller online and locked. Then sign in as an employee who has a grant for
+that room and unlock it. GPIO 23 goes low, the status LED on GPIO 2 lights for
+five seconds, the page reports the unlock, and the board relocks and
+acknowledges `completed`.
 
 ## Project layout
 
@@ -444,8 +442,7 @@ employee_management/
 │       ├── access_control.py       # Rooms, grants, unlock requests
 │       ├── door_device.py          # Signed ESP32 poll and acknowledge endpoints
 │       ├── door_hardware.py        # Gateway interface and resolution
-│       ├── wokwi_gateway.py        # Polling gateway for the ESP32
-│       ├── door_simulator.py       # Rotating QR proximity simulator
+│       ├── door_gateway.py         # Polling gateway for the ESP32
 │       ├── payroll_views.py        # Payroll and payslips
 │       ├── management/commands/    # seed, enroll_door_device, and others
 │       └── migrations/
@@ -456,17 +453,16 @@ employee_management/
 │       ├── App.jsx
 │       ├── AccountPage.jsx         # Employee workspace
 │       ├── ManagerDashboard.jsx    # Employer workspace
-│       ├── AccessControl.jsx       # Rooms, doors, simulator
+│       ├── AccessControl.jsx       # Rooms and doors
 │       └── api.js                  # Every API call, with JWT refresh
-├── wokwi/
-│   ├── sketch.ino                  # ESP32 firmware
-│   ├── platformio.ini
-│   ├── diagram.json                # Wokwi wiring
-│   └── secrets.h.example           # Copy to secrets.h (git-ignored)
+├── esp-idf-door/                    # ESP-IDF firmware for the physical door
+│   ├── sdkconfig.defaults           # Build settings; secrets go in sdkconfig
+│   ├── main/Kconfig.projbuild       # The menuconfig options
+│   └── components/                  # door_wifi, door_api, maglock, controller
 └── docs/
     ├── API.md
     ├── DEPLOYMENT.md
-    └── WOKWI_DOOR.md
+    └── PHYSICAL_DOOR.md
 ```
 
 ## Troubleshooting
@@ -479,25 +475,27 @@ because those settings are read with `os.environ[...]` and have no defaults.
 **Changes to `.env` seem ignored.** The file is read once at startup and the
 autoreloader does not watch it. Stop the server and start it again.
 
-**The Wokwi terminal prints HTML instead of status lines.** `host.wokwi.internal`
-is missing from `ALLOWED_HOSTS`, so Django is returning its debug error page and
-the firmware prints the body. Add it and restart Django.
+**The serial monitor prints HTML instead of status lines.** The address the
+board used is missing from `ALLOWED_HOSTS`, so Django is returning its debug
+error page and the firmware prints the body. Add it and restart Django.
 
-**The door shows offline even though Wokwi is running.** Every poll is failing
-authentication, so `last_seen_at` never updates. The usual cause is clock drift:
-the simulated ESP32 clock falls behind real time until the signed timestamp
-falls outside `DOOR_SIGNATURE_WINDOW_SECONDS`. Restart the simulation to resync
-its clock, or widen that window.
+**The board never joins the network.** Read the reason code in the
+`Disconnected from "..."` line. 201 is no such network in range, which on this
+chip usually means it is 5 GHz only; 15 and 204 are a wrong password.
+
+**The door shows offline even though the board is running.** Every poll is
+failing authentication, so `last_seen_at` never updates. Either the secret in
+`sdkconfig` no longer matches the enrollment, or the board clock has not
+synchronized, which the monitor reports as `Clock synchronization pending`.
 
 **Scanning returns 502.** That is the application's own response, not a server
 failure. `RoomUnlockView` returns 502 when the door controller cannot be
 reached, which means the device is offline. Access is still recorded as granted
 with a failed unlock.
 
-**`pio` is not recognised.** PlatformIO Core is installed with the IDE extension
-at `%USERPROFILE%\.platformio\penv\Scripts`, but an already-open terminal holds
-the PATH from before the extension was installed. Restart VS Code fully, or
-prepend that folder for the session.
+**`idf.py` is not recognised.** The ESP-IDF environment is per-terminal. Dot-source
+the activation script in each new shell:
+`. C:\Espressif	ools\Microsoft.v6.1.PowerShell_profile.ps1`.
 
 **Port 8000 is already in use.** Check for an older `runserver` still holding
 it. Running two Django servers on the same port makes which one answers a given

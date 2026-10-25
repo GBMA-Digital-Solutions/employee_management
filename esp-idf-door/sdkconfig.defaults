@@ -1,0 +1,26 @@
+# Build settings for the ESP32-WROOM DevKit this firmware runs on. Secrets and
+# Wi-Fi credentials are deliberately absent: set those with `idf.py menuconfig`,
+# which writes them to the untracked `sdkconfig`.
+CONFIG_IDF_TARGET="esp32"
+
+# Wi-Fi plus TLS plus the root certificate bundle does not fit the 1 MB app
+# partition of the default single-app table.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+CONFIG_PARTITION_TABLE_FILENAME="partitions_singleapp_large.csv"
+
+# Verify the API certificate against the bundled roots instead of pinning one.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+# Render serves GTS Root R4 cross-signed by the original GlobalSign Root CA.
+# The bundle carries GTS Root R4 but not that GlobalSign root, so the default
+# lookup, which only tries the issuer of the topmost certificate sent, fails
+# with "No matching trusted root certificate found". This option lets mbedtls
+# anchor on any bundled certificate in the chain instead, at a cost of about
+# 700 bytes of heap.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
+
+# The controller task runs the TLS handshake, which can outlast the default
+# watchdog window on a slow network.
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10

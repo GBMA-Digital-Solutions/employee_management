@@ -1,0 +1,55 @@
+menu "Employee Management Door"
+
+config DOOR_WIFI_SSID
+    string "Wi-Fi SSID (2.4 GHz only)"
+    default ""
+    help
+        The ESP32 has no 5 GHz radio. Point it at a 2.4 GHz network that can
+        also reach the Django API. The build fails while this is empty.
+
+config DOOR_WIFI_PASSWORD
+    string "Wi-Fi password"
+    default ""
+
+config DOOR_API_BASE_URL
+    string "Django API base URL (no trailing slash)"
+    default "https://employee-management-v2pz.onrender.com"
+    help
+        The deployed API, or a LAN address such as http://192.168.137.1:8000
+        for a Django server running on the computer's Mobile Hotspot.
+
+config DOOR_DEVICE_ID
+    string "Enrolled door device ID"
+    default "door-101"
+
+config DOOR_DEVICE_SECRET
+    string "Enrolled door device secret"
+    default ""
+    help
+        The one-time secret printed by `manage.py enroll_door_device`. The
+        build fails while this is empty, because unconfigured firmware would
+        otherwise flash as a controller that never opens anything.
+
+config DOOR_RELAY_GPIO
+    int "Maglock relay GPIO"
+    range 0 48
+    default 32
+
+config DOOR_RELAY_ACTIVE_LOW
+    bool "Relay unlock signal is active-low"
+    default y
+
+config DOOR_STATUS_LED_GPIO
+    int "Status LED GPIO, lit while unlocked (-1 disables)"
+    range -1 48
+    default 2
+    help
+        GPIO 2 is the on-board LED of a DevKit V1, so a bare board with no
+        relay wired still shows every unlock.
+
+config DOOR_POLL_INTERVAL_MS
+    int "Poll interval in milliseconds"
+    range 400 10000
+    default 400
+
+endmenu

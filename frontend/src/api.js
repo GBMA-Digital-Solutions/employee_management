@@ -510,16 +510,15 @@ export function unlockRoom(token, id, body) {
   return request(`/api/access-control/rooms/${id}/unlock/`, { method: "POST", token, body });
 }
 
-export function startDoorSimulator(token, room) {
-  return request(`/api/access-control/simulator/${room}/`, { method: "POST", token });
+// The printed sign taped at a room's door. Employer only: the token it carries
+// is what an employee proves they were standing at that door with.
+export function fetchRoomQr(token, id) {
+  return request(`/api/access-control/rooms/${id}/qr/`, { token });
 }
 
-export function fetchDoorSimulator(token, room) {
-  return request(`/api/access-control/simulator/${room}/`, { token });
-}
-
-export function stopDoorSimulator(token, room) {
-  return request(`/api/access-control/simulator/${room}/`, { method: "DELETE", token });
+// Issues a replacement, which stops every earlier printout from working.
+export function reissueRoomQr(token, id) {
+  return request(`/api/access-control/rooms/${id}/qr/`, { method: "POST", token });
 }
 
 export function fetchMyRooms(token) {
