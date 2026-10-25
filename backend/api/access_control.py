@@ -7,6 +7,7 @@ they were granted the room, and only then the enrolled physical door through
 `door_hardware`. Every attempt is recorded, granted or not.
 """
 import logging
+import secrets
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import transaction
@@ -195,11 +196,11 @@ class MyRoomSerializer(serializers.ModelSerializer):
 class UnlockRequestSerializer(serializers.Serializer):
     access_method = serializers.ChoiceField(
         choices=[choice for choice in RoomAccessAttempt.METHODS
-                 if choice[0] in {"app", "nfc", "bluetooth"}])
+                 if choice[0] in {"app", "qr", "nfc", "bluetooth"}])
     proximity_proof = serializers.CharField(
         required=False, allow_blank=True, max_length=4096,
-        help_text="Reserved for future reader challenges. Physical ESP32 commands currently follow "
-                  "authenticated app access and room-permission checks.")
+        help_text="For access_method \"qr\", the token read from the QR code printed at this door. "
+                  "Reserved otherwise, for future reader challenges.")
     distance_cm = serializers.FloatField(
         required=False, min_value=0, max_value=10000,
         help_text="How far the phone measured itself from the door. Required by doors with a range limit.")
@@ -316,6 +317,17 @@ class BusinessScoped:
         return {**super().get_serializer_context(), "business_id": self.business_id()}
 
 
+# Namespaces the printed code so a scanner can reject unrelated QR codes outright.
+DOOR_QR_PREFIX = "employee-door"
+
+RoomQrSerializer = inline_serializer(name="RoomDoorQr", fields={
+    "room": serializers.IntegerField(), "room_name": serializers.CharField(),
+    "building": serializers.CharField(), "floor": serializers.CharField(),
+    "door_identifier": serializers.CharField(),
+    "payload": serializers.CharField(help_text="Encode exactly this string into the printed QR code."),
+})
+
+
 @extend_schema(tags=TAGS)
 @extend_schema_view(
     list=extend_schema(summary="List your rooms", responses=with_errors({200: RoomSerializer(many=True)},
@@ -338,6 +350,26 @@ class RoomViewSet(BusinessScoped, viewsets.ModelViewSet):
 
     def get_queryset(self):
         return super().get_queryset().filter(business_id=self.business_id())
+
+    @extend_schema(
+        summary="The door QR code for this room",
+        description="GET returns the payload to print and tape at the door, issuing one the first time. "
+                    "POST issues a replacement, which immediately stops every earlier printout from "
+                    "working. Only an employer of the room business can read this: the token is what an "
+                    "employee proves they were at the door with, so it never appears in employee "
+                    "responses.",
+        request=None, responses=with_errors({200: RoomQrSerializer}, bad_request=False, not_found=True))
+    @action(detail=True, methods=["get", "post"])
+    def qr(self, request, pk=None):
+        room = self.get_object()
+        if request.method == "POST" or not room.door_qr_token:
+            room.door_qr_token = secrets.token_urlsafe(24)
+            room.save(update_fields=["door_qr_token"])
+        return Response({
+            "room": room.pk, "room_name": room.name, "building": room.building, "floor": room.floor,
+            "door_identifier": room.door_identifier,
+            "payload": f"{DOOR_QR_PREFIX}:{room.pk}:{room.door_qr_token}",
+        })
 
     def perform_create(self, serializer):
         serializer.save(business_id=self.business_id(), created_by=actor_name(self.request.user))
@@ -476,8 +508,8 @@ DENIAL_MESSAGES = {
     "not_approved": "Your employer must approve your signed contract before you can unlock doors.",
     "password_change_required": "Replace your temporary password before unlocking doors.",
     "no_permission": "Your employer has not granted you access to this room.",
-    "proximity_failed": "Your presence at this door could not be verified. Hold your phone to the door reader "
-                        "and try again.",
+    "proximity_failed": "Your presence at this door could not be verified. Scan the QR code printed at the "
+                        "door, and ask your employer to reprint it if it has been replaced.",
 }
 
 

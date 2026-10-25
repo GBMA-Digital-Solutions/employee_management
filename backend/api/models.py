@@ -655,6 +655,10 @@ class Room(models.Model):
     floor = models.CharField(max_length=30)
     # The identifier of the door controller fitted to this room.
     door_identifier = models.CharField(max_length=100)
+    # Printed and taped at the door. An employee scans it to name this room and
+    # to show they were at the door. Issued on demand and reissued on request,
+    # which is what invalidates a photographed or stale printout.
+    door_qr_token = models.CharField(max_length=64, blank=True)
     # A successful employee unlock at this door also records attendance.
     # There may be only one official check-in door for each business.
     is_check_in_door = models.BooleanField(default=False)
@@ -716,7 +720,7 @@ class RoomAccessAttempt(models.Model):
 
     # Legacy methods remain readable in access history, but new physical-door
     # requests are issued by the authenticated employee application.
-    METHODS = [("app", "Employee app"), ("nfc", "NFC (legacy)"),
+    METHODS = [("app", "Employee app"), ("qr", "Door QR code"), ("nfc", "NFC (legacy)"),
                ("bluetooth", "Bluetooth (legacy)"), ("range", "Phone in range (legacy simulator)"),
                ("door_code", "Door code (legacy simulator)")]
     RESULTS = [("granted", "Granted"), ("denied", "Denied")]

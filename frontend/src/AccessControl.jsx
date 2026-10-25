@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import jsQR from "jsqr";
+import QRCode from "qrcode";
 import { Link, useLocation } from "react-router";
 import ModalDialog from "./components/ModalDialog";
 import { useConfirm } from "./components/ConfirmDialog";
 import { deleteRoom, fetchAccessRecords, fetchAdminBusinesses, fetchAdminRecords, fetchMyAccessHistory,
-  fetchMyRooms, grantRoomAccess, grantRoomAccessBulk, revokeRoomAccess, saveRoom, unlockRoom } from "./api";
+  fetchMyRooms, fetchRoomQr, grantRoomAccess, grantRoomAccessBulk, reissueRoomQr, revokeRoomAccess, saveRoom,
+  unlockRoom } from "./api";
 
 const BASE = "/dashboard/access-control";
 const SECTION_TITLES = { rooms: "Rooms & Doors", permissions: "Access Permissions", history: "Access History" };
@@ -11,6 +14,9 @@ const DEVICE_STATUS = { not_configured: "Hardware not configured", online: "Onli
 const ADMIN_SOURCES = { rooms: "rooms", grants: "room-access-grants", changes: "room-permission-changes", history: "room-access-history" };
 const EMPLOYER_SOURCES = { rooms: "rooms", grants: "grants", changes: "permission-changes", history: "history" };
 const emptyRoom = { name: "", building: "", floor: "", door_identifier: "" };
+// Namespaces the printed sign, so an unrelated QR code is ignored rather than
+// sent to the server as a proof that cannot possibly match.
+const QR_PREFIX = "employee-door";
 
 const dateTime = (value) => value ? new Date(value).toLocaleString() : "Not recorded";
 const floorName = (floor) => /^\d+$/.test(floor) ? `Floor ${floor}` : floor;
@@ -38,6 +44,170 @@ function useAccessRecords(token, role, kind, business, onAuthError) {
   }, [token, role, kind, business, version, onAuthError]);
   const reload = useCallback(() => setVersion((value) => value + 1), []);
   return { ...state, reload };
+}
+
+function DoorQrScanner({ room, prompt, onScan, onClose }) {
+  const videoRef = useRef(null);
+  const onScanRef = useRef(onScan);
+  const [cameraError, setCameraError] = useState("");
+
+  useEffect(() => { onScanRef.current = onScan; }, [onScan]);
+
+  useEffect(() => {
+    let stopped = false;
+    let wrongDoorReported = false;
+    let stream;
+    let animationFrame;
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+
+    async function startCamera() {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error("Scanning needs a camera on a secure HTTPS connection.");
+        }
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } }, audio: false,
+        });
+        if (stopped) { stream.getTracks().forEach((track) => track.stop()); return; }
+        const video = videoRef.current;
+        video.srcObject = stream;
+        await video.play();
+
+        const scanFrame = () => {
+          if (stopped) return;
+          if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const image = context.getImageData(0, 0, canvas.width, canvas.height);
+            const result = jsQR(image.data, image.width, image.height, { inversionAttempts: "dontInvert" });
+            const [prefix, scannedRoom, proof] = result ? result.data.split(":") : [];
+            if (prefix === QR_PREFIX && proof) {
+              if (Number(scannedRoom) === room.id) {
+                stopped = true;
+                stream.getTracks().forEach((track) => track.stop());
+                onScanRef.current(proof);
+                return;
+              }
+              // Reported once: this runs on every camera frame.
+              if (!wrongDoorReported) {
+                wrongDoorReported = true;
+                setCameraError(`That sign belongs to a different door. Scan the one on ${room.name}.`);
+              }
+            }
+          }
+          animationFrame = window.requestAnimationFrame(scanFrame);
+        };
+        animationFrame = window.requestAnimationFrame(scanFrame);
+      } catch (err) {
+        if (!stopped) setCameraError(err.name === "NotAllowedError"
+          ? "Camera access was blocked. Allow camera permission and try again."
+          : err.message || "The camera could not be started.");
+      }
+    }
+
+    startCamera();
+    return () => {
+      stopped = true;
+      window.cancelAnimationFrame(animationFrame);
+      stream?.getTracks().forEach((track) => track.stop());
+    };
+  }, [room.id, room.name]);
+
+  return <div className="door-qr-scanner" role="dialog" aria-modal="true" aria-label="Scan the door QR code">
+    <div className="door-qr-scanner-card">
+      <strong>{prompt}</strong>
+      <p>Point the rear camera at the printed code on {room.name}.</p>
+      <div className="door-qr-camera">
+        <video ref={videoRef} muted playsInline aria-label="Live rear camera" />
+        <span aria-hidden="true" />
+      </div>
+      {cameraError && <p className="message error" role="alert">{cameraError}</p>}
+      <button type="button" className="button button-outline" onClick={onClose}>Cancel</button>
+    </div>
+  </div>;
+}
+
+function DoorQrPoster({ token, room, onClose }) {
+  const [payload, setPayload] = useState("");
+  const [image, setImage] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [confirm, confirmation] = useConfirm();
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchRoomQr(token, room.id)
+      .then((data) => { if (!cancelled) setPayload(data.payload); })
+      .catch((err) => { if (!cancelled) setError(err.message); });
+    return () => { cancelled = true; };
+  }, [token, room.id]);
+
+  useEffect(() => {
+    if (!payload) return undefined;
+    let cancelled = false;
+    QRCode.toDataURL(payload, { width: 320, margin: 2, errorCorrectionLevel: "M" })
+      .then((url) => { if (!cancelled) setImage(url); })
+      .catch(() => { if (!cancelled) setError("The QR code could not be drawn."); });
+    return () => { cancelled = true; };
+  }, [payload]);
+
+  // The sign is printed from its own window: this dialog lives in the browser
+  // top layer, which does not print reliably, and a page-wide print stylesheet
+  // would still carry the dashboard chrome onto the sheet.
+  function printSign() {
+    const sheet = window.open("", "_blank", "width=680,height=860");
+    if (!sheet) { setError("Allow pop-ups for this site to print the sign."); return; }
+    const escape = (value) => String(value).replace(/[&<>"]/g, (character) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[character]));
+    sheet.document.write(`<!doctype html><html lang="en"><head><meta charset="utf-8">`
+      + `<title>${escape(room.name)}</title><style>`
+      + "body{font-family:system-ui,Segoe UI,sans-serif;display:grid;justify-items:center;"
+      + "gap:16px;padding:48px;text-align:center}h1{margin:0;font-size:32px}"
+      + "p{margin:0;color:#555;font-size:19px}img{width:360px;height:auto}</style></head><body>"
+      + `<h1>${escape(room.name)}</h1>`
+      + `<p>${escape(room.building)}, ${escape(floorName(room.floor))}</p>`
+      + `<img src="${image}" alt="">`
+      + `<p>Scan to unlock${room.is_check_in_door ? " and record attendance" : ""}</p>`
+      + "</body></html>");
+    sheet.document.close();
+    sheet.focus();
+    window.setTimeout(() => { try { sheet.print(); } catch { /* closed before printing */ } }, 250);
+  }
+
+  async function reissue() {
+    if (!await confirm({
+      title: "Issue a new code?", confirmLabel: "Issue new code",
+      message: `Every sign already printed for ${room.name} stops working immediately. Print and put up the new one.`,
+    })) return;
+    setBusy(true);
+    setError("");
+    try {
+      const data = await reissueRoomQr(token, room.id);
+      setImage("");
+      setPayload(data.payload);
+    } catch (err) { setError(err.message); } finally { setBusy(false); }
+  }
+
+  return <ModalDialog title={`Door sign for ${room.name}`} onClose={onClose}>
+    {error && <p className="message error" role="alert">{error}</p>}
+    <div className="door-qr-poster">
+      <strong>{room.name}</strong>
+      <span>{room.building}, {floorName(room.floor)}</span>
+      {image ? <img src={image} alt={`Door QR code for ${room.name}`} />
+        : <p className="empty-state" role="status">Preparing the code…</p>}
+      <span>Scan to unlock{room.is_check_in_door ? " and record attendance" : ""}</span>
+    </div>
+    <p className="muted">Print this and tape it at the door. Anyone who can photograph it can use it, so
+      issue a new code if a printout goes missing.</p>
+    <div className="form-actions">
+      <button type="button" className="button button-coral" disabled={!image} onClick={printSign}>Print</button>
+      <button type="button" className="button button-outline" disabled={busy} onClick={reissue}>Issue a new code</button>
+      <button type="button" className="button button-outline" onClick={onClose}>Close</button>
+    </div>
+    {confirmation}
+  </ModalDialog>;
 }
 
 function DoorIcon() {
@@ -199,6 +369,8 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
   const [floor, setFloor] = useState("");
   const [editing, setEditing] = useState(null);
   const [managing, setManaging] = useState(null);
+  const [scanning, setScanning] = useState(null);
+  const [posterRoom, setPosterRoom] = useState(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -222,17 +394,21 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
   }, {}));
   const selected = rooms.rows.find((room) => room.id === selectedId) || null;
 
-  function attendanceAction(room, action) {
-    return unlock(room, action);
+  // An employee has to read the sign on the door; proof is the token it carries.
+  // An employer manages doors from here, so they unlock without one.
+  function requestUnlock(room, action = "", prompt = "Scan the door code") {
+    if (employer) return unlock(room, action);
+    return setScanning({ room, action, prompt });
   }
 
-  async function unlock(room, attendanceAction = "") {
+  async function unlock(room, attendanceAction = "", proof = "") {
     setBusy(true);
     setError("");
     setNotice("");
     try {
       const result = await unlockRoom(token, room.id, {
-        access_method: "app",
+        access_method: proof ? "qr" : "app",
+        ...(proof ? { proximity_proof: proof } : {}),
         ...(attendanceAction ? { attendance_action: attendanceAction } : {}),
       });
       setNotice(result.detail);
@@ -272,20 +448,22 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
           : selected.attendance_state === "completed" ? "Your workday is complete"
           : "Start your workday"}</strong>
         {selected.attendance_state === "not_started" && <button type="button" className="button button-coral" disabled={busy}
-          onClick={() => attendanceAction(selected, "scan_in")}>Check In, first arrival</button>}
+          onClick={() => requestUnlock(selected, "scan_in", "Scan to check in")}>Check In, first arrival</button>}
         {selected.attendance_state === "inside" && <>
           <button type="button" className="button button-coral" disabled={busy}
-            onClick={() => attendanceAction(selected, "scan_out")}>Scan Out, leaving temporarily</button>
+            onClick={() => requestUnlock(selected, "scan_out", "Scan to scan out")}>Scan Out, leaving temporarily</button>
           <button type="button" className="button button-outline" disabled={busy}
-            onClick={() => attendanceAction(selected, "check_out")}>Check Out, final departure</button>
+            onClick={() => requestUnlock(selected, "check_out", "Scan to check out")}>Check Out, final departure</button>
         </>}
         {selected.attendance_state === "outside" && <button type="button" className="button button-coral" disabled={busy}
-          onClick={() => attendanceAction(selected, "scan_in")}>Scan In, returning</button>}
+          onClick={() => requestUnlock(selected, "scan_in", "Scan to scan in")}>Scan In, returning</button>}
         {selected.device_status !== "online" && <small className="muted">The physical door is offline. Leaving is still recorded; arriving needs the ESP32 online.</small>}
       </div>}
       {(employer || selected.can_unlock) && !(selected.can_unlock && selected.is_check_in_door) && <button type="button" className="button button-coral"
-        disabled={busy || selected.device_status !== "online"} onClick={() => unlock(selected)}>{busy ? "Sending…" : "Unlock physical door"}</button>}
+        disabled={busy || selected.device_status !== "online"} onClick={() => requestUnlock(selected, "", "Scan to unlock")}>
+        {busy ? "Sending…" : employer ? "Unlock physical door" : "Scan door code to unlock"}</button>}
       {employer && <>
+        <button type="button" className="button button-outline" onClick={() => setPosterRoom(selected)}>Door QR sign</button>
         <button type="button" className="button button-outline" onClick={() => setManaging(selected)}>Manage permissions</button>
         <button type="button" className="button button-outline" onClick={() => setEditing(selected)}>Edit</button>
         <button type="button" className="danger-link" disabled={busy} onClick={() => remove(selected)}>Delete</button>
@@ -297,7 +475,7 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
 
   return <>
     <Heading title={role === "employee" ? "My Rooms" : "Rooms & Doors"}
-      description={role === "employee" ? "Select a room to unlock it when you are at the door." : "Select a room to view its details and unlock its door."}
+      description={role === "employee" ? "Choose a room, then scan the QR code printed at its door." : "Select a room to view its details, print its door sign, and unlock its door."}
       action={employer && <button type="button" className="button button-coral" onClick={() => setEditing({})}>+ Add room</button>} />
     <Messages error={error || rooms.error} notice={notice} />
     {rooms.rows.length > 0 && <div className="access-filters">
@@ -330,6 +508,9 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
       rooms.reload();
     }} />}
     {managing && <PermissionsDialog token={token} room={managing} employees={employees} onClose={() => setManaging(null)} onChanged={rooms.reload} />}
+    {posterRoom && <DoorQrPoster token={token} room={posterRoom} onClose={() => setPosterRoom(null)} />}
+    {scanning && <DoorQrScanner room={scanning.room} prompt={scanning.prompt} onClose={() => setScanning(null)}
+      onScan={(proof) => { setScanning(null); unlock(scanning.room, scanning.action, proof); }} />}
     {confirmation}
   </>;
 }

@@ -1,3 +1,4 @@
+import hmac
 from datetime import timedelta
 
 from django.conf import settings
@@ -38,7 +39,12 @@ class PhysicalDoorGateway(DoorGateway):
 
     def verify_proximity(self, room, user, method, proof):
         # Identity, employment approval and the room grant have already been
-        # checked by RoomUnlockView. This is direct authenticated app access.
+        # checked by RoomUnlockView. "app" is direct authenticated access from
+        # the room list; "qr" additionally requires the token printed on this
+        # room's own door, so the employee had to be in front of it.
+        if method == "qr":
+            printed = room.door_qr_token
+            return bool(printed) and hmac.compare_digest(printed, (proof or "").strip())
         return method == "app"
 
     def unlock(self, room, user):

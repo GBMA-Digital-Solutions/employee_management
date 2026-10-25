@@ -677,3 +677,8 @@ body:has(.form-modal[open]) { overflow: hidden; }
   .room-detail-actions { width: 100%; margin-left: 0; }
   .access-grant-row { flex-direction: column; }
 }
+
+.door-qr-poster { display: grid; justify-items: center; gap: 10px; padding: 20px; border: 2px solid var(--burgundy); border-radius: 12px; background: #fff; text-align: center; }
+.door-qr-poster > strong { font-size: 23px; color: var(--burgundy); }
+.door-qr-poster > span { color: #67655e; }
+.door-qr-poster img { width: min(320px, 68vw); height: auto; }
