@@ -1,20 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useLocation } from "react-router";
-import jsQR from "jsqr";
-import QRCode from "qrcode";
 import ModalDialog from "./components/ModalDialog";
 import { useConfirm } from "./components/ConfirmDialog";
-import { deleteRoom, fetchAccessRecords, fetchAdminBusinesses, fetchAdminRecords, fetchDoorSimulator, fetchMyAccessHistory,
-  fetchMyRooms, grantRoomAccess, grantRoomAccessBulk, revokeRoomAccess, saveRoom, startDoorSimulator, stopDoorSimulator,
-  unlockRoom } from "./api";
+import { deleteRoom, fetchAccessRecords, fetchAdminBusinesses, fetchAdminRecords, fetchMyAccessHistory,
+  fetchMyRooms, grantRoomAccess, grantRoomAccessBulk, revokeRoomAccess, saveRoom, unlockRoom } from "./api";
 
 const BASE = "/dashboard/access-control";
-const SECTION_TITLES = { rooms: "Rooms & Doors", permissions: "Access Permissions", history: "Access History", simulator: "Door Simulator" };
-const DEVICE_STATUS = { not_configured: "Hardware not configured", online: "Online", offline: "Offline", simulator: "Door simulator running" };
+const SECTION_TITLES = { rooms: "Rooms & Doors", permissions: "Access Permissions", history: "Access History" };
+const DEVICE_STATUS = { not_configured: "Hardware not configured", online: "Online", offline: "Offline" };
 const ADMIN_SOURCES = { rooms: "rooms", grants: "room-access-grants", changes: "room-permission-changes", history: "room-access-history" };
 const EMPLOYER_SOURCES = { rooms: "rooms", grants: "grants", changes: "permission-changes", history: "history" };
 const emptyRoom = { name: "", building: "", floor: "", door_identifier: "" };
-const QR_PREFIX = "employee-door";
 
 const dateTime = (value) => value ? new Date(value).toLocaleString() : "Not recorded";
 const floorName = (floor) => /^\d+$/.test(floor) ? `Floor ${floor}` : floor;
@@ -49,83 +45,6 @@ function DoorIcon() {
     <path d="M6 21V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v17M4 21h16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
     <circle cx="14.6" cy="12.4" r="1.1" fill="currentColor" />
   </svg>;
-}
-
-function LiveQrScanner({ roomId, onScan, onClose }) {
-  const videoRef = useRef(null);
-  const onScanRef = useRef(onScan);
-  const [cameraError, setCameraError] = useState("");
-
-  useEffect(() => { onScanRef.current = onScan; }, [onScan]);
-
-  useEffect(() => {
-    let stopped = false;
-    let stream;
-    let animationFrame;
-    const canvas = document.createElement("canvas");
-    const context = canvas.getContext("2d", { willReadFrequently: true });
-
-    async function startCamera() {
-      try {
-        if (!navigator.mediaDevices?.getUserMedia) {
-          throw new Error("Live camera scanning requires a secure HTTPS connection.");
-        }
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } }, audio: false,
-        });
-        if (stopped) { stream.getTracks().forEach((track) => track.stop()); return; }
-        const video = videoRef.current;
-        video.srcObject = stream;
-        await video.play();
-
-        const scanFrame = () => {
-          if (stopped) return;
-          if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth) {
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            context.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const image = context.getImageData(0, 0, canvas.width, canvas.height);
-            const result = jsQR(image.data, image.width, image.height, { inversionAttempts: "dontInvert" });
-            if (result) {
-              const [prefix, scannedRoom, proof] = result.data.split(":");
-              if (prefix === QR_PREFIX && Number(scannedRoom) === roomId && proof) {
-                stopped = true;
-                stream.getTracks().forEach((track) => track.stop());
-                onScanRef.current(proof);
-                return;
-              }
-            }
-          }
-          animationFrame = window.requestAnimationFrame(scanFrame);
-        };
-        animationFrame = window.requestAnimationFrame(scanFrame);
-      } catch (err) {
-        if (!stopped) setCameraError(err.name === "NotAllowedError"
-          ? "Camera access was blocked. Allow camera permission and try again."
-          : err.message || "The camera could not be started.");
-      }
-    }
-
-    startCamera();
-    return () => {
-      stopped = true;
-      window.cancelAnimationFrame(animationFrame);
-      stream?.getTracks().forEach((track) => track.stop());
-    };
-  }, [roomId]);
-
-  return <div className="door-qr-scanner" role="dialog" aria-modal="true" aria-label="Scan door QR code">
-    <div className="door-qr-scanner-card">
-      <strong>Scan the door QR code</strong>
-      <p>Point the rear camera at the changing QR code. The door unlocks automatically when it is recognized.</p>
-      <div className="door-qr-camera">
-        <video ref={videoRef} muted playsInline aria-label="Live rear camera" />
-        <span aria-hidden="true" />
-      </div>
-      {cameraError && <p className="message error" role="alert">{cameraError}</p>}
-      <button type="button" className="button button-outline" onClick={onClose}>Cancel</button>
-    </div>
-  </div>;
 }
 
 function Heading({ title, description, action }) {
@@ -283,7 +202,6 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
-  const [scanningRoom, setScanningRoom] = useState(null);
   const [confirm, confirmation] = useConfirm();
   const employer = role === "employer";
   const admin = role === "admin";
@@ -305,23 +223,18 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
   const selected = rooms.rows.find((room) => room.id === selectedId) || null;
 
   function attendanceAction(room, action) {
-    // A live simulated door proves proximity with the code on its screen; an
-    // offline door has no screen, so the action goes straight through.
-    if (room.device_status === "simulator") return setScanningRoom({ room, action });
-    return unlock(room, "", action);
+    return unlock(room, action);
   }
 
-  async function unlock(room, proximityProof = "", attendanceAction = "") {
+  async function unlock(room, attendanceAction = "") {
     setBusy(true);
     setError("");
     setNotice("");
     try {
-      // On real doors the proof comes from the door's own NFC tag or Bluetooth beacon once readers are installed.
-      // A simulated door supplies its short-lived proof only through the QR code scanned at the door.
-      const result = await unlockRoom(token, room.id, room.device_status === "simulator"
-        ? { access_method: "door_code", proximity_proof: proximityProof, ...(attendanceAction ? { attendance_action: attendanceAction } : {}) }
-        : { access_method: "NDEFReader" in window ? "nfc" : "bluetooth", proximity_proof: "",
-            ...(attendanceAction ? { attendance_action: attendanceAction } : {}) });
+      const result = await unlockRoom(token, room.id, {
+        access_method: "app",
+        ...(attendanceAction ? { attendance_action: attendanceAction } : {}),
+      });
       setNotice(result.detail);
       await rooms.reload();
     } catch (err) {
@@ -368,14 +281,10 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
         </>}
         {selected.attendance_state === "outside" && <button type="button" className="button button-coral" disabled={busy}
           onClick={() => attendanceAction(selected, "scan_in")}>Scan In, returning</button>}
-        {selected.device_status !== "simulator" && <small className="muted">The door is offline. Leaving is still recorded; arriving needs the door running.</small>}
+        {selected.device_status !== "online" && <small className="muted">The physical door is offline. Leaving is still recorded; arriving needs the ESP32 online.</small>}
       </div>}
-      {(employer || selected.can_unlock) && selected.device_status === "simulator" && !(selected.can_unlock && selected.is_check_in_door) && <button
-        type="button" className="button button-coral" disabled={busy} onClick={() => setScanningRoom({ room: selected, action: "" })}>
-        {busy ? "Checking…" : "Scan QR to unlock"}
-      </button>}
-      {(employer || selected.can_unlock) && selected.device_status !== "simulator" && !(selected.can_unlock && selected.is_check_in_door) && <button type="button" className="button button-coral"
-        disabled={busy} onClick={() => unlock(selected)}>{busy ? "Checking…" : "Unlock door"}</button>}
+      {(employer || selected.can_unlock) && !(selected.can_unlock && selected.is_check_in_door) && <button type="button" className="button button-coral"
+        disabled={busy || selected.device_status !== "online"} onClick={() => unlock(selected)}>{busy ? "Sending…" : "Unlock physical door"}</button>}
       {employer && <>
         <button type="button" className="button button-outline" onClick={() => setManaging(selected)}>Manage permissions</button>
         <button type="button" className="button button-outline" onClick={() => setEditing(selected)}>Edit</button>
@@ -422,11 +331,6 @@ function RoomsPage({ token, role, business, employees, onAuthError }) {
     }} />}
     {managing && <PermissionsDialog token={token} room={managing} employees={employees} onClose={() => setManaging(null)} onChanged={rooms.reload} />}
     {confirmation}
-    {scanningRoom && <LiveQrScanner roomId={scanningRoom.room.id} onClose={() => setScanningRoom(null)} onScan={async (proof) => {
-      const { room, action } = scanningRoom;
-      setScanningRoom(null);
-      await unlock(room, proof, action);
-    }} />}
   </>;
 }
 
@@ -611,103 +515,6 @@ function HistoryPage({ token, role, business, onAuthError }) {
   </>;
 }
 
-// --- Door Simulator --------------------------------------------------------------------------
-
-function SimulatorPage({ token, onAuthError }) {
-  const rooms = useAccessRecords(token, "employer", "rooms", "", onAuthError);
-  const [roomId, setRoomId] = useState("");
-  const [running, setRunning] = useState(null);
-  const [door, setDoor] = useState(null);
-  const [qrImage, setQrImage] = useState("");
-  const [error, setError] = useState("");
-  const qrPayload = door ? `${QR_PREFIX}:${door.room}:${door.door_code}` : "";
-
-  // The page is the door: it keeps checking in while open and switches the simulator off when left.
-  useEffect(() => {
-    if (!running) return undefined;
-    let cancelled = false;
-    const timer = window.setInterval(() => {
-      fetchDoorSimulator(token, running).then((state) => { if (!cancelled) setDoor(state); }).catch((err) => {
-        if (cancelled) return;
-        setError(err.status === 404 ? "The door simulator was switched off." : err.message);
-        if (err.status === 404) { setRunning(null); setDoor(null); }
-        if (err.status === 401) onAuthError?.(err);
-      });
-    }, 1000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-      stopDoorSimulator(token, running).catch(() => {});
-    };
-  }, [token, running, onAuthError]);
-
-  useEffect(() => {
-    if (!qrPayload) return undefined;
-    let cancelled = false;
-    QRCode.toDataURL(qrPayload, { width: 260, margin: 2, errorCorrectionLevel: "M" })
-      .then((url) => { if (!cancelled) setQrImage(url); })
-      .catch(() => { if (!cancelled) setError("The door QR code could not be created."); });
-    return () => { cancelled = true; };
-  }, [qrPayload]);
-
-  async function start() {
-    setError("");
-    try {
-      const state = await startDoorSimulator(token, roomId);
-      setDoor(state);
-      setRunning(state.room);
-    } catch (err) { setError(err.message); }
-  }
-
-  return <>
-    <Heading title="Door Simulator" description="Use this screen as a room's door for testing. Employees with access scan the changing QR code while at the door, and it locks again after 5 seconds." />
-    <Messages error={error || rooms.error} />
-    {!door ? <section className="panel records-panel">
-      <div className="door-sim-start">
-        <select aria-label="Room" value={roomId} onChange={(event) => setRoomId(event.target.value)}>
-          <option value="">Select a room</option>
-          {rooms.rows.map((room) => <option key={room.id} value={room.id}>{room.is_check_in_door ? "CHECK-IN DOOR: " : ""}{room.name} · {room.building}, {floorName(room.floor)}</option>)}
-        </select>
-        <button type="button" className="button button-coral" disabled={!roomId} onClick={start}>Start door</button>
-      </div>
-      <p className="muted">{rooms.rows.length ? "Keep this page open while testing. Leaving it switches the simulator off and the room goes back to its real door hardware." : "Add a room on Rooms & Doors first."}</p>
-    </section> : <>
-      <section className={`panel door-sim ${door.locked ? "door-sim-locked" : "door-sim-unlocked"}`} aria-live="polite">
-        <p className="door-sim-room">{door.room_name} · {door.building}, {floorName(door.floor)}</p>
-        {door.is_check_in_door && <span className="check-in-door-badge">Check-in door</span>}
-        <div className="door-sim-visual"><DoorIcon /></div>
-        <strong className="door-sim-state">{door.locked ? "Locked" : "Unlocked"}</strong>
-        <p className="door-sim-note">{door.locked ? "Waiting for an authorized employee." : `Locks again in ${Math.ceil(door.relocks_in)} s`}</p>
-        <div className="door-sim-device" aria-live="polite">
-          <strong>{door.esp32?.mode === "virtual" ? "Virtual ESP32 controller" : "ESP32 controller"}</strong>
-          {!door.esp32?.configured ? <p>Not enrolled — browser-only simulation.</p> : <>
-            <p>Connection: <span className={`status-badge status-${door.esp32.connection === "online" ? "granted" : "denied"}`}>{door.esp32.connection}{door.esp32.mode === "virtual" ? " (browser)" : ""}</span></p>
-            <p>Relay / maglock: <strong>{door.esp32.relay_locked ? "Locked (LED on)" : "Unlocked (LED off)"}</strong></p>
-            <p>Last command: {door.esp32.last_command
-              ? `${door.esp32.last_command.state}${door.esp32.last_command.simulated ? " (simulated)" : ""} · ${door.esp32.last_command.id}`
-              : "No command sent yet"}</p>
-          </>}
-        </div>
-        <div className="door-sim-code">
-          <small>Scan to unlock</small>
-          {qrImage && <img src={qrImage} alt={`Changing QR code for ${door.room_name}`} />}
-          <small>New QR code in {door.code_changes_in} s</small>
-        </div>
-        <button type="button" className="button button-outline" onClick={() => { setRunning(null); setDoor(null); }}>Stop simulator</button>
-      </section>
-      <section className="panel records-panel" aria-label="Activity on this door">
-        <h3 className="door-sim-heading">Activity on this door</h3>
-        <Table rows={door.recent} empty="No unlock attempts yet. Every attempt is also kept in Access History." columns={[
-          { title: "Time", render: (row) => new Date(row.created_at).toLocaleTimeString() },
-          { title: "Person", render: (row) => <Person name={row.user_name} email={row.user_email} /> },
-          { title: "Result", render: (row) => <span className={`status-badge status-${row.result}`}>{row.result === "granted" ? "Granted" : "Denied"}</span> },
-          { title: "Details", render: (row) => row.denial_reason_label || row.unlock_status_label || "—" },
-        ]} />
-      </section>
-    </>}
-  </>;
-}
-
 // --- Layout --------------------------------------------------------------------------------
 
 export default function AccessControl({ token, role, employees = [], onAuthError }) {
@@ -715,7 +522,7 @@ export default function AccessControl({ token, role, employees = [], onAuthError
   const [business, setBusiness] = useState("");
   const [businesses, setBusinesses] = useState([]);
   const sections = role === "employee" ? ["rooms", "history"]
-    : ["rooms", "permissions", "history", ...(role === "employer" ? ["simulator"] : [])];
+    : ["rooms", "permissions", "history"];
   const current = sections.find((key) => pathname.startsWith(`${BASE}/${key}`)) || "rooms";
 
   useEffect(() => {
@@ -742,7 +549,6 @@ export default function AccessControl({ token, role, employees = [], onAuthError
       {current === "rooms" && <RoomsPage key={business} {...props} employees={employees} />}
       {current === "permissions" && <PermissionsPage {...props} employees={employees} />}
       {current === "history" && <HistoryPage {...props} />}
-      {current === "simulator" && <SimulatorPage token={token} onAuthError={onAuthError} />}
     </div>
   </div>;
 }

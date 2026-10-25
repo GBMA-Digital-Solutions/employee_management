@@ -9,7 +9,6 @@ from .payroll_views import (AssetIncidentViewSet, PayrollCalculationViewSet, Pay
 from .workplace import WorkplaceLocationView
 from .access_control import (RoomAccessGrantViewSet, RoomAccessHistoryViewSet, RoomPermissionChangeViewSet,
                              RoomUnlockView, RoomViewSet)
-from .door_simulator import DoorSimulatorView
 from .door_device import DoorDeviceAcknowledgeView, DoorDevicePollView
 from .activity_monitoring import (ActivityIngestView, ActivityReportView, AgentIssueView,
                                   ClassificationView, MonitoringDisclosureView)
@@ -41,7 +40,6 @@ urlpatterns = [path("reports/", ManagerReportsView.as_view(), name="manager-repo
                path("activity-monitoring/ingest/", ActivityIngestView.as_view(), name="activity-ingest"),
                path("me/monitoring-disclosure/", MonitoringDisclosureView.as_view(), name="monitoring-disclosure"),
                path("access-control/rooms/<int:pk>/unlock/", RoomUnlockView.as_view(), name="room-unlock"),
-               path("access-control/simulator/<int:pk>/", DoorSimulatorView.as_view(), name="door-simulator"),
                path("door-devices/<str:device_id>/poll/", DoorDevicePollView.as_view(), name="door-device-poll"),
                path("door-devices/<str:device_id>/commands/<uuid:command_id>/ack/",
                     DoorDeviceAcknowledgeView.as_view(), name="door-device-ack"),

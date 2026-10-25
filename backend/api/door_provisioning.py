@@ -1,9 +1,9 @@
-"""Automatic virtual controllers, so every room has a working Door Simulator.
+"""Automatic virtual controllers, so every room has a working door panel.
 
 A room with no controller used to fall back to "not enrolled", which is why a
 freshly cloned or newly deployed install looked different from a machine where
 someone had run `enroll_door_device` by hand. Every room now gets a virtual
-controller instead: it drives the simulator panel (connection, relay, last
+controller instead: it drives the Access Control panel (connection, relay, last
 command) without any hardware present.
 
 A virtual controller holds no secret and is refused by the signed device

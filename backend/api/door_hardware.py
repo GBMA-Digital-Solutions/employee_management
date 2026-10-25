@@ -60,26 +60,17 @@ def gateway():
 
 
 def gateway_for(room):
-    """The room's running Door Simulator if there is one, otherwise the hardware integration."""
-    from .door_simulator import SimulatorGateway, active_doors
-
-    door = active_doors().filter(room=room).first()
+    """Return the enrolled physical hardware integration for this room."""
     hardware = gateway()
-    # The Wokwi gateway is room-specific; other gateway implementations retain
+    # The polling gateway is room-specific; other gateway implementations retain
     # their original no-argument construction contract.
     if hasattr(hardware, "for_room"):
         hardware = hardware.for_room(room)
-    return SimulatorGateway(door, hardware) if door else hardware
+    return hardware
 
 
 def device_status(room, context):
     """The room's door status, caching the lookups in a serializer `context`."""
-    from .door_simulator import active_room_ids
-
-    if "simulated" not in context:
-        context["simulated"] = active_room_ids()
-    if room.pk in context["simulated"]:
-        return "simulator"
     if "gateway" not in context:
         context["gateway"] = gateway()
     selected = context["gateway"]

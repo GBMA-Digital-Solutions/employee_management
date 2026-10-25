@@ -3,8 +3,8 @@
 An employer manages the rooms of their own business and grants individual
 employees access by email. Unlocking always runs the full check here on the
 server: who is asking, whether they belong to the room's business, whether
-they were granted the room, and only then proximity and the door itself
-through `door_hardware`. Every attempt is recorded, granted or not.
+they were granted the room, and only then the enrolled physical door through
+`door_hardware`. Every attempt is recorded, granted or not.
 """
 import logging
 from decimal import Decimal, ROUND_HALF_UP
@@ -51,8 +51,7 @@ class RoomSerializer(serializers.ModelSerializer):
     business_name = serializers.CharField(source="business.name", read_only=True)
     authorized_users = serializers.SerializerMethodField(help_text="Employees granted this room.")
     device_status = serializers.SerializerMethodField(
-        help_text="`not_configured` until a door hardware integration is connected; `simulator` while an "
-                  "employer runs the Door Simulator for the room.")
+        help_text="`not_configured` until a physical controller is enrolled, then `online` or `offline`.")
 
     class Meta:
         model = Room
@@ -195,11 +194,12 @@ class MyRoomSerializer(serializers.ModelSerializer):
 
 class UnlockRequestSerializer(serializers.Serializer):
     access_method = serializers.ChoiceField(
-        choices=[choice for choice in RoomAccessAttempt.METHODS if choice[0] != "range"])
+        choices=[choice for choice in RoomAccessAttempt.METHODS
+                 if choice[0] in {"app", "nfc", "bluetooth"}])
     proximity_proof = serializers.CharField(
         required=False, allow_blank=True, max_length=4096,
-        help_text="The challenge response read from the door's NFC tag or Bluetooth beacon, or the door code "
-                  "shown on a Door Simulator screen. Verified by the server, never by the client.")
+        help_text="Reserved for future reader challenges. Physical ESP32 commands currently follow "
+                  "authenticated app access and room-permission checks.")
     distance_cm = serializers.FloatField(
         required=False, min_value=0, max_value=10000,
         help_text="How far the phone measured itself from the door. Required by doors with a range limit.")
@@ -506,8 +506,8 @@ def denial_reason(user, room):
     description=(
         "For the room's employer, and for employees their employer granted this room. In order: the "
         "account must belong to the room's business, an employee needs an approved contract and a grant "
-        "for this room, then the door hardware integration verifies the `proximity_proof` and opens the "
-        "door. Every request is recorded in the access history, whatever the outcome.\n\n"
+        "for this room, then the enrolled physical controller receives an unlock command. Every request "
+        "is recorded in the access history, whatever the outcome.\n\n"
         "Until a door hardware integration is configured the answer is **503** and nothing is unlocked; "
         "a successful unlock is never simulated. Platform administrators are always refused."),
     request=UnlockRequestSerializer,
@@ -583,9 +583,8 @@ class RoomUnlockView(APIView):
         distance = serializer.validated_data.get("distance_cm")
         if max_distance is not None and (distance is None or distance > max_distance):
             return deny("too_far", message="Get closer to the door.")
-        if not proof or not gateway.verify_proximity(room, user, method, proof):
-            return deny("proximity_failed", message="That door code is not right. Check the code on the door "
-                        "screen and try again." if method == "door_code" else None)
+        if not gateway.verify_proximity(room, user, method, proof):
+            return deny("proximity_failed")
         try:
             confirmed = gateway.unlock(room, user)
         except Exception:

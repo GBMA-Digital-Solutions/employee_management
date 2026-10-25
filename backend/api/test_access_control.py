@@ -9,7 +9,7 @@ from rest_framework.test import APITestCase
 
 from .door_hardware import DoorGateway
 from .models import (AccountProfile, Attendance, AttendanceVisit, Business, Contract, Employee, Room, RoomAccessAttempt, RoomAccessGrant,
-                     RoomPermissionChange, SimulatedDoor)
+                     RoomPermissionChange)
 from .onboarding import purge_employee
 from .platform import purge_business
 
@@ -428,70 +428,6 @@ class AccessControlTests(APITestCase):
         self.assertEqual([row["user_email"] for row in history], ["aline@example.com"])
         self.assertEqual(self.client.get(f"/api/admin/records/room-access-history/?employee={self.bosco.pk}").data, [])
         self.assertEqual(self.client.post("/api/access-control/rooms/", {}, format="json").status_code, 403)
-
-    # --- Door Simulator ------------------------------------------------------------
-
-    def test_door_simulator_unlocks_for_granted_employees_then_relocks(self):
-        RoomAccessGrant.objects.create(room=self.room, employee=self.aline)
-        simulator = f"/api/access-control/simulator/{self.room.pk}/"
-        self.as_user(self.employer)
-        started = self.client.post(simulator)
-        self.assertEqual(started.status_code, 200, started.data)
-        self.assertTrue(started.data["locked"])
-        self.assertRegex(started.data["door_code"], r"^\d{4}$")
-        self.assertTrue(0 < started.data["code_changes_in"] <= 30)
-        code = started.data["door_code"]
-
-        def enter(proof, method="door_code"):
-            return self.client.post(f"/api/access-control/rooms/{self.room.pk}/unlock/",
-                                    {"access_method": method, "proximity_proof": proof}, format="json")
-
-        self.as_user(self.aline_user)
-        self.assertEqual(self.client.get("/api/me/rooms/").data[0]["device_status"], "simulator")
-        self.assertNotIn("door_code", str(self.client.get("/api/me/rooms/").data))
-        wrong = enter("0000" if code != "0000" else "1111")
-        self.assertEqual((wrong.status_code, wrong.data["detail"]),
-                         (403, "That door code is not right. Check the code on the door screen and try again."))
-        self.assertEqual(enter("").status_code, 403)
-        self.assertEqual(enter(code, method="range").status_code, 400)
-        opened = enter(f" {code} ")
-        self.assertEqual((opened.status_code, opened.data["unlock_status"]), (200, "confirmed"))
-
-        self.as_user(self.bosco_user)
-        self.assertEqual(enter(code).status_code, 403)
-
-        self.as_user(self.employer)
-        door = self.client.get(simulator).data
-        self.assertFalse(door["locked"])
-        self.assertGreater(door["relocks_in"], 0)
-        self.assertEqual([(row["result"], row["denial_reason"]) for row in door["recent"]],
-                         [("denied", "no_permission"), ("granted", ""), ("denied", "proximity_failed"),
-                          ("denied", "proximity_failed")])
-        SimulatedDoor.objects.filter(room=self.room).update(unlocked_until=timezone.now() - timedelta(seconds=1))
-        self.assertTrue(self.client.get(simulator).data["locked"])
-        self.assertEqual(self.client.get("/api/access-control/history/?result=granted").data[0]["access_method"],
-                         "door_code")
-
-        self.assertEqual(self.client.delete(simulator).status_code, 204)
-        self.as_user(self.aline_user)
-        self.assertEqual(enter(code).status_code, 503)
-
-    def test_only_the_owning_employer_runs_the_simulator_and_it_stops_when_abandoned(self):
-        simulator = f"/api/access-control/simulator/{self.room.pk}/"
-        for user in (self.aline_user, self.admin):
-            self.as_user(user)
-            self.assertEqual(self.client.post(simulator).status_code, 403)
-        self.as_user(self.other_employer)
-        self.assertEqual(self.client.post(simulator).status_code, 404)
-        self.assertFalse(SimulatedDoor.objects.exists())
-
-        self.as_user(self.employer)
-        code = self.client.post(simulator).data["door_code"]
-        SimulatedDoor.objects.update(last_seen_at=timezone.now() - timedelta(minutes=1))
-        self.assertEqual(self.client.get("/api/access-control/rooms/").data[0]["device_status"], "not_configured")
-        self.assertEqual(self.client.post(f"/api/access-control/rooms/{self.room.pk}/unlock/",
-                                          {"access_method": "door_code", "proximity_proof": code},
-                                          format="json").status_code, 503)
 
     def test_removing_employees_and_businesses_still_works(self):
         RoomAccessGrant.objects.create(room=self.room, employee=self.aline)

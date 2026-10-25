@@ -32,9 +32,9 @@ CORS_ALLOWED_ORIGINS=https://employee-management-one-sooty.vercel.app,https://em
 ALLOWED_HOSTS=employee-management-v2pz.onrender.com
 ```
 
-No door variables are required for browser-only simulation. Only set
-`DOOR_GATEWAY=api.wokwi_gateway.WokwiPollingGateway` when an enrolled ESP32
-must poll the deployed API. Device secrets must never be placed in Vercel or a
+Only set `DOOR_GATEWAY=api.door_gateway.PhysicalDoorGateway` when an enrolled
+ESP32 must poll the deployed API. Without it every unlock stops at
+`NotConfiguredGateway` and no command is queued. Device secrets must never be placed in Vercel or a
 `VITE_*` variable.
 
 Use the origins without quotes, paths, trailing slashes or `#sign-in`. Add another exact origin if you use a different preview deployment URL. Save and deploy the environment changes. A healthy API responds to `/api/health/` with `{"status":"ok"}`.

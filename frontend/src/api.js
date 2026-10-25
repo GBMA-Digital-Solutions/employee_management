@@ -510,18 +510,6 @@ export function unlockRoom(token, id, body) {
   return request(`/api/access-control/rooms/${id}/unlock/`, { method: "POST", token, body });
 }
 
-export function startDoorSimulator(token, room) {
-  return request(`/api/access-control/simulator/${room}/`, { method: "POST", token });
-}
-
-export function fetchDoorSimulator(token, room) {
-  return request(`/api/access-control/simulator/${room}/`, { token });
-}
-
-export function stopDoorSimulator(token, room) {
-  return request(`/api/access-control/simulator/${room}/`, { method: "DELETE", token });
-}
-
 export function fetchMyRooms(token) {
   return request("/api/me/rooms/", { token });
 }

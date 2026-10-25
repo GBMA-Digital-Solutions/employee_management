@@ -3,9 +3,6 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 python manage.py migrate --noinput
-# Safe to run on every deploy. The migration backfills existing databases and
-# this command repairs any room whose create-time provisioning was interrupted.
-python manage.py initialize_door_controllers
 # Read-only report of accounts sharing an email; adds the unique email index once there are none.
 if ! python manage.py check_duplicate_emails; then
     echo "WARNING: python manage.py check_duplicate_emails failed; see the error above. Starting the server anyway." >&2

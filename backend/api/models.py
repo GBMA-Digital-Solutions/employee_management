@@ -714,9 +714,11 @@ class RoomAccessAttempt(models.Model):
     correctly after a room, an employee or an account is removed.
     """
 
-    # "range" is no longer accepted; it stays for attempts already recorded with it.
-    METHODS = [("nfc", "NFC"), ("bluetooth", "Bluetooth"), ("range", "Phone in range (simulator)"),
-               ("door_code", "Door code (simulator)")]
+    # Legacy methods remain readable in access history, but new physical-door
+    # requests are issued by the authenticated employee application.
+    METHODS = [("app", "Employee app"), ("nfc", "NFC (legacy)"),
+               ("bluetooth", "Bluetooth (legacy)"), ("range", "Phone in range (legacy simulator)"),
+               ("door_code", "Door code (legacy simulator)")]
     RESULTS = [("granted", "Granted"), ("denied", "Denied")]
     REASONS = [
         ("not_member", "Not part of this business"),
@@ -761,9 +763,10 @@ class RoomAccessAttempt(models.Model):
 
 
 class SimulatedDoor(models.Model):
-    """An employer's browser standing in for a room's door while no hardware is installed.
+    """Unused. Left in place so removing it is a deliberate, separate migration.
 
-    It only counts while the simulator page keeps checking in (`last_seen_at`).
+    This backed the browser door simulator, which has been removed in favour of
+    an enrolled physical controller. Nothing reads or writes these rows.
     """
 
     room = models.OneToOneField(Room, on_delete=models.CASCADE, related_name="simulated_door")
@@ -778,7 +781,7 @@ class DoorDevice(models.Model):
     """An enrolled controller. The raw shared secret is never stored."""
 
     # A virtual controller is provisioned automatically for every room so the
-    # Door Simulator shows the same panel everywhere. It holds no secret and
+    # Access Control panel looks the same everywhere. It holds no secret and
     # can never authenticate the signed endpoints; only an enrolled hardware
     # controller can, which is what keeps a real unlock honest.
     VIRTUAL = "virtual"

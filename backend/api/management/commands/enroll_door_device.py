@@ -8,12 +8,12 @@ from api.models import DoorDevice, Room
 
 
 class Command(BaseCommand):
-    help = "Enroll or rotate a Wokwi door device without exposing its secret through an API."
+    help = "Enroll or rotate a physical door device without exposing its secret through an API."
 
     def add_arguments(self, parser):
         parser.add_argument("door_identifier")
         parser.add_argument("--device-id")
-        parser.add_argument("--secret-env", default="WOKWI_DEVICE_SECRET")
+        parser.add_argument("--secret-env", default="DOOR_DEVICE_SECRET")
 
     def handle(self, *args, **options):
         matches = list(Room.objects.filter(door_identifier=options["door_identifier"])[:2])

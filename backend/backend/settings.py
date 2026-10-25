@@ -72,7 +72,7 @@ REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
 
-# Local/Wokwi door controller integration. Device secrets are enrolled into the
+# Physical door controller integration. Device secrets are enrolled into the
 # database as SHA-256 derived keys; raw secrets never enter frontend responses.
 DOOR_GATEWAY = os.getenv("DOOR_GATEWAY", "")
 DOOR_COMMAND_TTL_SECONDS = int(os.getenv("DOOR_COMMAND_TTL_SECONDS", "8"))
