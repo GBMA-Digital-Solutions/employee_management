@@ -9,7 +9,7 @@ import { deleteRoom, fetchAccessRecords, fetchAdminBusinesses, fetchAdminRecords
   unlockRoom } from "./api";
 
 const BASE = "/dashboard/access-control";
-const SECTION_TITLES = { rooms: "Rooms & Doors", permissions: "Access Permissions", history: "Access History" };
+const SECTION_TITLES = { rooms: "Rooms & Doors", permissions: "Access Permissions", history: "Access History", qr: "Door QR Codes" };
 const DEVICE_STATUS = { not_configured: "Hardware not configured", online: "Online", offline: "Offline" };
 const ADMIN_SOURCES = { rooms: "rooms", grants: "room-access-grants", changes: "room-permission-changes", history: "room-access-history" };
 const EMPLOYER_SOURCES = { rooms: "rooms", grants: "grants", changes: "permission-changes", history: "history" };
@@ -129,12 +129,12 @@ function DoorQrScanner({ room, prompt, onScan, onClose }) {
   </div>;
 }
 
-function DoorQrPoster({ token, room, onClose }) {
+// Shared by the Door QR Codes page and the shortcut dialog on a room.
+function useDoorQr(token, room) {
   const [payload, setPayload] = useState("");
   const [image, setImage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [confirm, confirmation] = useConfirm();
 
   useEffect(() => {
     let cancelled = false;
@@ -153,34 +153,7 @@ function DoorQrPoster({ token, room, onClose }) {
     return () => { cancelled = true; };
   }, [payload]);
 
-  // The sign is printed from its own window: this dialog lives in the browser
-  // top layer, which does not print reliably, and a page-wide print stylesheet
-  // would still carry the dashboard chrome onto the sheet.
-  function printSign() {
-    const sheet = window.open("", "_blank", "width=680,height=860");
-    if (!sheet) { setError("Allow pop-ups for this site to print the sign."); return; }
-    const escape = (value) => String(value).replace(/[&<>"]/g, (character) => ({
-      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[character]));
-    sheet.document.write(`<!doctype html><html lang="en"><head><meta charset="utf-8">`
-      + `<title>${escape(room.name)}</title><style>`
-      + "body{font-family:system-ui,Segoe UI,sans-serif;display:grid;justify-items:center;"
-      + "gap:16px;padding:48px;text-align:center}h1{margin:0;font-size:32px}"
-      + "p{margin:0;color:#555;font-size:19px}img{width:360px;height:auto}</style></head><body>"
-      + `<h1>${escape(room.name)}</h1>`
-      + `<p>${escape(room.building)}, ${escape(floorName(room.floor))}</p>`
-      + `<img src="${image}" alt="">`
-      + `<p>Scan to unlock${room.is_check_in_door ? " and record attendance" : ""}</p>`
-      + "</body></html>");
-    sheet.document.close();
-    sheet.focus();
-    window.setTimeout(() => { try { sheet.print(); } catch { /* closed before printing */ } }, 250);
-  }
-
   async function reissue() {
-    if (!await confirm({
-      title: "Issue a new code?", confirmLabel: "Issue new code",
-      message: `Every sign already printed for ${room.name} stops working immediately. Print and put up the new one.`,
-    })) return;
     setBusy(true);
     setError("");
     try {
@@ -190,24 +163,105 @@ function DoorQrPoster({ token, room, onClose }) {
     } catch (err) { setError(err.message); } finally { setBusy(false); }
   }
 
-  return <ModalDialog title={`Door sign for ${room.name}`} onClose={onClose}>
+  return { image, error, busy, setError, reissue };
+}
+
+// Printed from its own window: a modal lives in the browser top layer, which
+// does not print reliably, and a page-wide print stylesheet would still carry
+// the dashboard chrome onto the sheet.
+function printDoorSign(room, image, onBlocked) {
+  const sheet = window.open("", "_blank", "width=680,height=860");
+  if (!sheet) { onBlocked("Allow pop-ups for this site to print the sign."); return; }
+  const escape = (value) => String(value).replace(/[&<>"]/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[character]));
+  sheet.document.write(`<!doctype html><html lang="en"><head><meta charset="utf-8">`
+    + `<title>${escape(room.name)}</title><style>`
+    + "body{font-family:system-ui,Segoe UI,sans-serif;display:grid;justify-items:center;"
+    + "gap:16px;padding:48px;text-align:center}h1{margin:0;font-size:32px}"
+    + "p{margin:0;color:#555;font-size:19px}img{width:360px;height:auto}</style></head><body>"
+    + `<h1>${escape(room.name)}</h1>`
+    + `<p>${escape(room.building)}, ${escape(floorName(room.floor))}</p>`
+    + `<img src="${image}" alt="">`
+    + `<p>Scan to unlock${room.is_check_in_door ? " and record attendance" : ""}</p>`
+    + "</body></html>");
+  sheet.document.close();
+  sheet.focus();
+  window.setTimeout(() => { try { sheet.print(); } catch { /* closed before printing */ } }, 250);
+}
+
+function DoorSign({ room, image }) {
+  return <div className="door-qr-poster">
+    <strong>{room.name}</strong>
+    <span>{room.building}, {floorName(room.floor)}</span>
+    {image ? <img src={image} alt={`Door QR code for ${room.name}`} />
+      : <p className="empty-state" role="status">Preparing the code…</p>}
+    <span>Scan to unlock{room.is_check_in_door ? " and record attendance" : ""}</span>
+  </div>;
+}
+
+const QR_WARNING = "Print this and tape it at the door. Anyone who can photograph it can use it, "
+  + "so issue a new code if a printout goes missing.";
+
+// Mount this with key={room.id}: switching room remounts it, which clears the
+// previous code without resetting state from inside an effect.
+function DoorSignPanel({ token, room, children }) {
+  const { image, error, busy, setError, reissue } = useDoorQr(token, room);
+  const [confirm, confirmation] = useConfirm();
+
+  async function confirmReissue() {
+    if (!await confirm({
+      title: "Issue a new code?", confirmLabel: "Issue new code",
+      message: `Every sign already printed for ${room.name} stops working immediately. Print and put up the new one.`,
+    })) return;
+    reissue();
+  }
+
+  return <>
     {error && <p className="message error" role="alert">{error}</p>}
-    <div className="door-qr-poster">
-      <strong>{room.name}</strong>
-      <span>{room.building}, {floorName(room.floor)}</span>
-      {image ? <img src={image} alt={`Door QR code for ${room.name}`} />
-        : <p className="empty-state" role="status">Preparing the code…</p>}
-      <span>Scan to unlock{room.is_check_in_door ? " and record attendance" : ""}</span>
-    </div>
-    <p className="muted">Print this and tape it at the door. Anyone who can photograph it can use it, so
-      issue a new code if a printout goes missing.</p>
+    <DoorSign room={room} image={image} />
+    <p className="muted">{QR_WARNING}</p>
     <div className="form-actions">
-      <button type="button" className="button button-coral" disabled={!image} onClick={printSign}>Print</button>
-      <button type="button" className="button button-outline" disabled={busy} onClick={reissue}>Issue a new code</button>
-      <button type="button" className="button button-outline" onClick={onClose}>Close</button>
+      <button type="button" className="button button-coral" disabled={!image}
+        onClick={() => printDoorSign(room, image, setError)}>Print</button>
+      <button type="button" className="button button-outline" disabled={busy} onClick={confirmReissue}>Issue a new code</button>
+      {children}
     </div>
     {confirmation}
+  </>;
+}
+
+function DoorQrPoster({ token, room, onClose }) {
+  return <ModalDialog title={`Door sign for ${room.name}`} onClose={onClose}>
+    <DoorSignPanel key={room.id} token={token} room={room}>
+      <button type="button" className="button button-outline" onClick={onClose}>Close</button>
+    </DoorSignPanel>
   </ModalDialog>;
+}
+
+function DoorQrPage({ token, role, business, onAuthError }) {
+  const rooms = useAccessRecords(token, role, "rooms", business, onAuthError);
+  const [selectedId, setSelectedId] = useState("");
+  // Derived rather than defaulted in an effect, which would cascade renders.
+  const selected = rooms.rows.find((room) => String(room.id) === String(selectedId)) || rooms.rows[0] || null;
+
+  return <>
+    <Heading title="Door QR Codes"
+      description="Print a code for each room and tape it at the door. Employees scan it with their phone to unlock and to record attendance." />
+    <Messages error={rooms.error} notice="" />
+    {rooms.loading ? <p className="empty-state" role="status">Loading rooms…</p>
+      : !rooms.rows.length ? <section className="panel"><p className="empty-state">Add a room on Rooms &amp; Doors first.</p></section>
+      : <section className="panel">
+        <div className="access-filters">
+          <select aria-label="Room" value={selected ? String(selected.id) : ""}
+            onChange={(event) => setSelectedId(event.target.value)}>
+            {rooms.rows.map((room) => <option key={room.id} value={room.id}>
+              {room.is_check_in_door ? "CHECK-IN DOOR: " : ""}{room.name} · {room.building}, {floorName(room.floor)}
+            </option>)}
+          </select>
+        </div>
+        {selected && <DoorSignPanel key={selected.id} token={token} room={selected} />}
+      </section>}
+  </>;
 }
 
 function DoorIcon() {
@@ -702,8 +756,10 @@ export default function AccessControl({ token, role, employees = [], onAuthError
   const { pathname } = useLocation();
   const [business, setBusiness] = useState("");
   const [businesses, setBusinesses] = useState([]);
+  // Only an employer may read a door token, so only they get the QR page.
   const sections = role === "employee" ? ["rooms", "history"]
-    : ["rooms", "permissions", "history"];
+    : role === "admin" ? ["rooms", "permissions", "history"]
+    : ["rooms", "permissions", "history", "qr"];
   const current = sections.find((key) => pathname.startsWith(`${BASE}/${key}`)) || "rooms";
 
   useEffect(() => {
@@ -730,6 +786,7 @@ export default function AccessControl({ token, role, employees = [], onAuthError
       {current === "rooms" && <RoomsPage key={business} {...props} employees={employees} />}
       {current === "permissions" && <PermissionsPage {...props} employees={employees} />}
       {current === "history" && <HistoryPage {...props} />}
+      {current === "qr" && <DoorQrPage key={business} {...props} />}
     </div>
   </div>;
 }
